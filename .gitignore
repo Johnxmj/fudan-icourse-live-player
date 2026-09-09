@@ -7,3 +7,5 @@ dist/
 .venv/
 build/
 *.spec
+course-selection.json
+课程目录.json

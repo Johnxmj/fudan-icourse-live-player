@@ -1,5 +1,6 @@
 import { listLiveCourses, resolveLiveSource } from './live-api.js';
 import { readCourseIds, saveCourseIds } from './course-settings.js';
+import { createDirectoryService, discoverRecentTerms } from './course-directory.js';
 import {
   parseRequest,
   safeCourse,
@@ -106,6 +107,16 @@ function assertApiSuccess(result) {
 }
 
 const defaultFetcher = {
+  async getDirectoryTerms() {
+    const result = await apiGet('portal/courseapi/v3/multi-search/get-course-list', { tenant: 222, page: 1, per_page: 500 });
+    assertApiSuccess(result);
+    return discoverRecentTerms(result.body.data);
+  },
+  async getCourseList({ term, page, per_page }) {
+    const result = await apiGet('portal/courseapi/v3/multi-search/get-course-list', { tenant: 222, term, page, per_page });
+    assertApiSuccess(result);
+    return result.body.data;
+  },
   async getSubInfo(courseId, subId) {
     const result = await apiGet(
       'courseapi/v3/portal-home-setting/get-sub-info',
@@ -167,6 +178,7 @@ export function createBackgroundHandlers(deps = {}) {
   const probe = deps.probe || (() => probeSession(deps));
   const storage = deps.storage || (typeof deps.storageGet === 'function' ? { get: deps.storageGet } : undefined);
   const getCourseIds = deps.getCourseIds || (() => readCourseIds(storage));
+  const directoryService = createDirectoryService({ fetchPage: params => fetcher.getCourseList(params) });
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
 
@@ -190,6 +202,21 @@ export function createBackgroundHandlers(deps = {}) {
 
   return {
     getSessionState: refreshSession,
+    async directory(message = {}) {
+      try {
+        await refreshSession();
+        if (currentSession.state !== 'ready') return { state: currentSession.state };
+        if (message.type === 'GET_DIRECTORY_TERMS') {
+          const result = await fetcher.getDirectoryTerms();
+          return { state: 'ready', terms: result.terms, currentTerm: result.currentTerm };
+        }
+        if (message.type !== 'SEARCH_COURSES') return { state: 'failed' };
+        const result = await directoryService.search({ term: message.term, query: message.query, page: message.page, perPage: message.perPage });
+        return { state: 'ready', ...result };
+      } catch (error) {
+        return { state: error?.state === 'login-required' ? 'login-required' : 'failed' };
+      }
+    },
     async handle(message) {
       const request = parseRequest(message);
       if (request.type === CAPABILITIES) {
@@ -382,6 +409,13 @@ export function installRuntimeListeners(
 
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isAllowedSender(sender, false, chromeApi)) return false;
+
+    if (message?.type === 'GET_DIRECTORY_TERMS' || message?.type === 'SEARCH_COURSES') {
+      Promise.resolve().then(() => handlers.directory(message))
+        .then(sendResponse)
+        .catch(() => sendResponse({ state: 'failed' }));
+      return true;
+    }
 
     if (message?.type === 'GET_COURSE_IDS') {
       readCourseIds(chromeApi.storage?.local)

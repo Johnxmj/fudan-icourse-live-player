@@ -3,14 +3,26 @@
   <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>复旦课程直播</title><link rel="stylesheet" href="popup.css"></head>
   <body>
     <h1>复旦课程直播</h1>
-    <p class="intro">添加课程后，查看当前正在进行的直播。</p>
+    <p class="intro">按课程名、教师、学院或课程代码查找课程，勾选后即可关注直播。</p>
+    <div class="actions"><button id="login" type="button">复旦官方登录</button><button id="refresh" type="button">刷新直播</button></div>
+    <section class="directory" aria-labelledby="directory-heading">
+      <h2 id="directory-heading">查找课程</h2>
+      <label for="directory-term">最近课程所属学期</label>
+      <div class="term-row"><select id="directory-term"><option value="">请先加载学期</option></select><button id="directory-load" type="button">加载学期</button></div>
+      <form id="directory-search"><label for="directory-query">课程名、教师、学院或课程代码</label><div class="search-row"><input id="directory-query" type="search" maxlength="120" placeholder="输入课程名、教师、学院或课程代码"><button id="directory-submit" type="submit" disabled>搜索</button></div></form>
+      <p id="directory-status" role="status" aria-live="polite">完成官方登录后，加载学期开始查找。</p>
+      <ul id="directory-results"></ul>
+      <div class="directory-pages"><button id="directory-previous" type="button" disabled>上一页</button><button id="directory-next" type="button" disabled>下一页</button></div>
+      <p id="directory-followed"></p><button id="directory-save" type="button" disabled>保存关注课程</button>
+    </section>
+    <details class="manual-settings"><summary>手动输入课程链接或 ID</summary>
     <form id="course-settings">
       <label for="course-ids">关注的课程</label>
       <textarea id="course-ids" rows="4" placeholder="粘贴课程 ID 或 iCourse 课程链接，每行一门" aria-describedby="course-help"></textarea>
       <p id="course-help">支持逗号或换行分隔。只保存课程 ID，不保存链接中的其他信息。</p>
       <button id="save" type="submit">保存并检查课程</button>
     </form>
-    <div class="actions"><button id="login" type="button">复旦官方登录</button><button id="refresh" type="button">刷新课程</button></div>
+    </details>
     <ul id="courses" aria-live="polite"></ul>
     <p id="status" role="status" aria-live="polite"></p>
     <script type="module" src="popup.js"></script>

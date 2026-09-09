@@ -7,13 +7,13 @@ from live_player import cli
 class InteractiveLauncherTest(unittest.TestCase):
     def test_interactive_login_does_not_modify_environment_or_echo_password(self):
         original = {"OTHER": "kept"}
-        ask = Mock(side_effect=[" 20260001 ", "123, 456"])
+        ask = Mock(side_effect=[" 20260001 "])
         secret = Mock(return_value="private password")
         result = cli.prompt_environment(original, input_fn=ask, password_fn=secret)
         self.assertEqual(original, {"OTHER": "kept"})
         self.assertEqual(result["StuId"], "20260001")
         self.assertEqual(result["UISPsw"], "private password")
-        self.assertEqual(result["COURSE_IDS"], "123, 456")
+        self.assertNotIn("COURSE_IDS", result)
         self.assertEqual(secret.call_count, 1)
         self.assertNotIn("private password", str(ask.call_args_list))
 

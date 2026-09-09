@@ -35,3 +35,16 @@ export async function saveCourseIds(value, storage = globalThis.chrome?.storage?
   await storage.set({ courseIds: ids });
   return ids;
 }
+
+/** Apply search selections to the latest saved list without replacing unrelated courses. */
+export async function saveCourseSelection(changes, storage = globalThis.chrome?.storage?.local) {
+  if (!Array.isArray(changes) || changes.length > 400 || changes.some(change => !change || typeof change.courseId !== 'string' || !SAFE_ID.test(change.courseId) || typeof change.selected !== 'boolean')) {
+    throw new TypeError('课程选择无效，请重新勾选。');
+  }
+  const ids = new Set(await readCourseIds(storage));
+  for (const { courseId, selected } of changes) {
+    if (selected) ids.add(courseId);
+    else ids.delete(courseId);
+  }
+  return saveCourseIds([...ids].join('\n'), storage);
+}
