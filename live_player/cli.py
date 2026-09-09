@@ -302,6 +302,17 @@ def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print
         output_fn(f"已选 {len(selected)} 门。可继续搜索添加，或直接回车启动播放器。")
 
 
+def _configure_console_encoding():
+    """Keep localized launcher messages printable on Windows CI and consoles."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv=None, env=None) -> int:
     parser = argparse.ArgumentParser(
         prog="live_player",
@@ -314,6 +325,7 @@ def main(argv=None, env=None) -> int:
     parser.add_argument("--interactive", action="store_true", help="按提示输入学号、密码和课程，无需配置环境变量")
     parser.add_argument("--select-courses", action="store_true", help="重新按课程名或教师搜索，替换已保存的课程选择")
     args = parser.parse_args(argv)
+    _configure_console_encoding()
     values = dict(os.environ if env is None else env)
     session_manager = None
     saved_metadata = ()
