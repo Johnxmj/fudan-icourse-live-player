@@ -1,14 +1,9 @@
-import crypto from "node:crypto";
-
 const WEBVPN_BASE = "https://webvpn.fudan.edu.cn";
-const AES_KEY = Buffer.from("wrdvpnisthebest!", "utf8");
-const IV_HEX = AES_KEY.toString("hex");
+// This route prefix is deterministic for the one host this extension supports.
+// Keep the browser runtime free of Node-only crypto imports.
+const IV_HEX = "77726476706e69737468656265737421";
+const ENCRYPTED_ALLOWED_HOST = "f9f44e8935236d1e781d8dad961b2631a501f26f";
 const ALLOWED_HOST = "icourse.fudan.edu.cn";
-
-function encryptHost(hostname) {
-  const cipher = crypto.createCipheriv("aes-128-cfb", AES_KEY, AES_KEY);
-  return Buffer.concat([cipher.update(hostname, "utf8"), cipher.final()]).toString("hex");
-}
 
 /** Convert an iCourse URL to its fixed Fudan WebVPN route. */
 export function toWebVpnUrl(value) {
@@ -19,8 +14,8 @@ export function toWebVpnUrl(value) {
   const port = parsed.port && !((protocol === "https" && parsed.port === "443") || (protocol === "http" && parsed.port === "80"))
     ? `-${parsed.port}` : "";
   const suffix = `${parsed.pathname.replace(/^\//, "")}${parsed.search}${parsed.hash}`;
-  const encoded = `${IV_HEX}${encryptHost(parsed.hostname)}`;
+  const encoded = `${IV_HEX}${ENCRYPTED_ALLOWED_HOST}`;
   return `${WEBVPN_BASE}/${protocol}${port}/${encoded}${suffix ? `/${suffix}` : ""}`;
 }
 
-export const WEBVPN_PREFIX = `${WEBVPN_BASE}/https/${IV_HEX}${encryptHost(ALLOWED_HOST)}`;
+export const WEBVPN_PREFIX = `${WEBVPN_BASE}/https/${IV_HEX}${ENCRYPTED_ALLOWED_HOST}`;

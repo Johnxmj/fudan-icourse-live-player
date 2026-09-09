@@ -35,6 +35,20 @@ test('manifest injects only the Pages bridge on the approved Pages origin', () =
   }]);
 });
 
+test('extension runtime sources do not import Node-only modules', () => {
+  const runtimeSources = [
+    'edge_extension/src/background.js',
+    'edge_extension/src/live-api.js',
+    'edge_extension/src/protocol.js',
+    'edge_extension/src/webvpn-url.js',
+    'edge_extension/src/page-bridge.js',
+  ];
+  for (const file of runtimeSources) {
+    const source = readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /(?:from|import)\s*[^;]*['"]node:/, file);
+  }
+});
+
 test('manifest key is loadable SPKI and derives the approved Pages extension ID', () => {
   const publicKey = createPublicKey({
     key: Buffer.from(manifest.key, 'base64'),
