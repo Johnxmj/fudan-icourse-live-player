@@ -15,6 +15,12 @@ The Pages shell has no cloud proxy. It works with the Edge extension or with an
 explicitly started local bridge. Pairing tokens are fragment-only, one-use, and
 kept in memory; media is streamed without local persistence.
 
+On the public Pages site, the Edge helper is detected through a content-script
+bridge injected only on `https://johnxmj.github.io/*`. The bridge uses a
+versioned nonce handshake and exposes only capabilities, current-live metadata,
+and refresh. Credentials, cookies, bearer tokens, signed media URLs, and player
+source responses remain inside the extension or local bridge.
+
 ## Run locally
 
 Install Python dependencies from `requirements.txt`, set `StuId`, `UISPsw`, and

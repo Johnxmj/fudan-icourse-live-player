@@ -3,6 +3,10 @@ const SAFE_VIEWS = new Set(["teacher", "student", "teacher_audio", "student_audi
 const SAFE_ID = /^[A-Za-z0-9]{1,64}$/;
 const SAFE_EXTENSION_ID = /^[a-p]{32}$/;
 const SAFE_NONCE = /^[A-Za-z0-9._:-]{1,256}$/;
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const PAGE_ORIGIN = "https://johnxmj.github.io";
+const BRIDGE_SOURCE = "fudan-icourse-live-player";
+const BRIDGE_REQUEST_TYPES = new Set(["CAPABILITIES", "LIST_LIVE", "REFRESH"]);
 const COURSE_KEYS = [
   "course_id", "course_title", "teacher", "room", "sub_id", "sub_title",
   "starts_at", "ends_at", "status", "available_views",
@@ -49,13 +53,99 @@ function responseState(result) {
   return "failed";
 }
 
+function createPageBridge(windowRef) {
+  if (!windowRef?.addEventListener || typeof windowRef.postMessage !== "function") {
+    throw new Error("Pages bridge is unavailable");
+  }
+  const nonce = nonceValue();
+  const pending = new Map();
+  let requestSequence = 0;
+  let readyPromise = null;
+
+  const timeout = (reject, message) => {
+    const error = new Error(message);
+    error.code = "BRIDGE_TIMEOUT";
+    reject(error);
+  };
+  const onMessage = (event) => {
+    if (event.source !== windowRef || event.origin !== PAGE_ORIGIN) return;
+    const data = event.data;
+    if (!data || typeof data !== "object" || data.source !== BRIDGE_SOURCE || data.version !== PROTOCOL_VERSION) return;
+    if (data.type === "PAGE_BRIDGE_READY") {
+      if (data.nonce !== nonce || !readyPromise) return;
+      readyPromise.resolve();
+      readyPromise = null;
+      return;
+    }
+    if (data.type !== "PAGE_BRIDGE_RESPONSE" || data.nonce !== nonce || !SAFE_REQUEST_ID.test(data.requestId || "")) return;
+    const entry = pending.get(data.requestId);
+    if (!entry) return;
+    pending.delete(data.requestId);
+    clearTimeout(entry.timer);
+    if (data.ok === true && data.payload && typeof data.payload === "object") entry.resolve(data.payload);
+    else entry.resolve({ error: data.payload?.error || { code: "REQUEST_FAILED" } });
+  };
+  windowRef.addEventListener("message", onMessage);
+
+  const post = (message) => windowRef.postMessage({
+    source: BRIDGE_SOURCE,
+    version: PROTOCOL_VERSION,
+    ...message,
+  }, PAGE_ORIGIN);
+
+  const ensureReady = () => {
+    if (readyPromise) return readyPromise.promise;
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    const timer = setTimeout(() => {
+      if (readyPromise?.promise !== promise) return;
+      readyPromise = null;
+      timeout(reject, "Pages bridge handshake timed out");
+    }, 1500);
+    readyPromise = { promise, resolve: () => { clearTimeout(timer); resolve(); }, reject };
+    post({ type: "PAGE_BRIDGE_HELLO", nonce });
+    return promise;
+  };
+
+  return {
+    send(type, payload = {}) {
+      if (!BRIDGE_REQUEST_TYPES.has(type)) return Promise.reject(new Error("request is not available through Pages bridge"));
+      return ensureReady().then(() => new Promise((resolve, reject) => {
+        const requestId = `${Date.now()}-${++requestSequence}`;
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          timeout(reject, "Pages bridge request timed out");
+        }, 5000);
+        pending.set(requestId, { resolve, reject, timer });
+        post({
+          type: "PAGE_BRIDGE_REQUEST",
+          nonce,
+          requestId,
+          request: { version: PROTOCOL_VERSION, type, payload },
+        });
+      }));
+    },
+    dispose() {
+      windowRef.removeEventListener?.("message", onMessage);
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error("Pages bridge disposed"));
+      }
+      pending.clear();
+      readyPromise = null;
+    },
+  };
+}
+
 export function createExtensionTransport({ extensionId, runtime, windowRef = globalThis } = {}) {
   if (typeof extensionId !== "string" || !SAFE_EXTENSION_ID.test(extensionId)) {
     throw new TypeError("extensionId is required");
   }
   const origin = `chrome-extension://${extensionId}`;
+  const pageBridge = typeof runtime?.sendMessage === "function" ? null : createPageBridge(windowRef);
   const send = (type, payload) => {
-    if (typeof runtime?.sendMessage !== "function") return Promise.resolve(null);
+    if (pageBridge) return pageBridge.send(type, payload);
     return Promise.resolve(runtime.sendMessage(extensionId, {
       version: PROTOCOL_VERSION,
       type,
@@ -177,6 +267,7 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
     },
     getState() { return currentState; },
     get state() { return currentState; },
+    dispose() { pageBridge?.dispose(); mounted?.dispose?.(); },
   };
 }
 

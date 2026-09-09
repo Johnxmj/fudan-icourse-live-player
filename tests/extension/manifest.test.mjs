@@ -27,6 +27,14 @@ test('manifest exposes player only to Pages and has stable public identity', () 
   assert.deepEqual(manifest.web_accessible_resources, [{ resources: ['player/*'], matches: ['https://johnxmj.github.io/*'] }]);
 });
 
+test('manifest injects only the Pages bridge on the approved Pages origin', () => {
+  assert.deepEqual(manifest.content_scripts, [{
+    matches: ['https://johnxmj.github.io/*'],
+    js: ['src/page-bridge.js'],
+    run_at: 'document_start',
+  }]);
+});
+
 test('manifest key is loadable SPKI and derives the approved Pages extension ID', () => {
   const publicKey = createPublicKey({
     key: Buffer.from(manifest.key, 'base64'),
