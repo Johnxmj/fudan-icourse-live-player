@@ -4,9 +4,17 @@
 
 ## 三种入口
 
-1. 在 Edge 加载 `dist/edge-extension`，打开 Pages 的 `/live/` 页面。
+1. 在 Edge 加载 `dist/edge-extension`。打开扩展弹窗，在 `Course IDs` 中填入课程 ID（逗号或空格分隔），点击 `Save course IDs`，再打开 Pages 的 `/live/` 页面。
 2. 在本机设置 `StuId`、`UISPsw`、`COURSE_IDS` 后运行 `python -m live_player.cli --pages`。
 3. 直接运行本地播放器页面，按界面提示连接助手。
+
+扩展示例课程 ID：
+
+```text
+37142, 37234, 38154, 38463, 38723
+```
+
+首次使用扩展时，在弹窗点击 `Log in with Fudan CAS`，在新标签页完成官方 CAS 登录。登录成功后回到 Pages 页面刷新即可。扩展只查询并显示当前正在直播的课程，课程没有直播时列表为空是正常现象。
 
 公开 Pages 页面不会直接调用 `chrome.runtime`。安装 Edge 扩展后，扩展会在
 `https://johnxmj.github.io/*` 注入受限的 content-script 桥接脚本，Pages 通过

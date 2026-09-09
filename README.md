@@ -42,6 +42,19 @@ node edge_extension/scripts/build.mjs
 Load `dist/edge-extension` in `edge://extensions` with Developer mode enabled.
 The generated ZIP is `dist/fudan-icourse-live-edge.zip`.
 
+After loading the extension, open its popup and enter the iCourse IDs in the
+`Course IDs` field (comma or space separated), then click `Save course IDs`.
+For example:
+
+```text
+37142, 37234, 38154, 38463, 38723
+```
+
+The IDs are stored only in the browser extension's local storage. Click
+`Log in with Fudan CAS` once to establish the official session, then refresh
+the Pages player. The extension lists only courses that are live right now;
+an empty list does not indicate that a replay is available.
+
 ## Test
 
 ```powershell
