@@ -13,6 +13,7 @@ test('build contains player assets and no private files', () => {
     assert.equal(files.includes('player/vendor/hls.min.js'), true);
     assert.equal(files.some((file) => /\.env|cookie|credential/i.test(file)), false);
     assert.equal(existsSync(join(output, 'edge-extension', 'manifest.json')), true);
+    assert.equal(existsSync(join(output, 'edge-extension', 'src', 'page-bridge.js')), true);
     assert.equal(existsSync(join(output, 'fudan-icourse-live-edge.zip')), true);
     const playerHtml = readFileSync(join(output, 'edge-extension', 'player', 'index.html'), 'utf8');
     const hlsScript = playerHtml.match(/<script[^>]+src="([^"]*hls\.min\.js)"[^>]*>/i);

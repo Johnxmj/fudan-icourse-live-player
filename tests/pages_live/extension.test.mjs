@@ -157,3 +157,52 @@ test("listLive strips untrusted extension metadata before Pages consumes it", as
     available_views: ["teacher"],
   }]);
 });
+
+test("Pages discovers the extension through the content-script postMessage bridge", async () => {
+  const listeners = new Set();
+  const sent = [];
+  const windowRef = {
+    addEventListener(type, listener) { if (type === "message") listeners.add(listener); },
+    removeEventListener(type, listener) { if (type === "message") listeners.delete(listener); },
+    postMessage(message, targetOrigin) {
+      sent.push({ message, targetOrigin });
+      if (message.type === "PAGE_BRIDGE_HELLO") {
+        queueMicrotask(() => {
+          for (const listener of listeners) listener({
+            source: windowRef,
+            origin: "https://johnxmj.github.io",
+            data: {
+              source: "fudan-icourse-live-player",
+              version: 1,
+              type: "PAGE_BRIDGE_READY",
+              nonce: message.nonce,
+            },
+          });
+        });
+      }
+      if (message.type === "PAGE_BRIDGE_REQUEST") {
+        queueMicrotask(() => {
+          for (const listener of listeners) listener({
+            source: windowRef,
+            origin: "https://johnxmj.github.io",
+            data: {
+              source: "fudan-icourse-live-player",
+              version: 1,
+              type: "PAGE_BRIDGE_RESPONSE",
+              nonce: message.nonce,
+              requestId: message.requestId,
+              ok: true,
+              payload: { version: 1, capabilities: { live: true } },
+            },
+          });
+        });
+      }
+    },
+  };
+  const transport = createExtensionTransport({ extensionId: EXTENSION_ID, windowRef });
+  assert.equal(await transport.probe(), true);
+  assert.deepEqual(sent.map(({ message, targetOrigin }) => ({ type: message.type, targetOrigin })), [
+    { type: "PAGE_BRIDGE_HELLO", targetOrigin: "https://johnxmj.github.io" },
+    { type: "PAGE_BRIDGE_REQUEST", targetOrigin: "https://johnxmj.github.io" },
+  ]);
+});

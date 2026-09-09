@@ -7,6 +7,11 @@
   "host_permissions": ["https://webvpn.fudan.edu.cn/*", "https://icourse.fudan.edu.cn/*"],
   "background": {"service_worker": "src/background.js", "type": "module"},
   "action": {"default_popup": "popup/index.html"},
+  "content_scripts": [{
+    "matches": ["https://johnxmj.github.io/*"],
+    "js": ["src/page-bridge.js"],
+    "run_at": "document_start"
+  }],
   "externally_connectable": {"matches": ["https://johnxmj.github.io/*"]},
   "web_accessible_resources": [{"resources": ["player/*"], "matches": ["https://johnxmj.github.io/*"]}]
 }

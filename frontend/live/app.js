@@ -145,7 +145,7 @@ export function boot({
   bindRailToggle(railToggle, rail);
 
   const adapters = [];
-  if (typeof extensionFactory !== "function" && extensionId && runtime) {
+  if (typeof extensionFactory !== "function" && extensionId) {
     extensionFactory = () => createExtensionTransport({ extensionId, runtime, windowRef });
   }
   if (typeof extensionFactory === "function") {
