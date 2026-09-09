@@ -14,12 +14,31 @@ import { WEBVPN_PREFIX } from './webvpn-url.js';
 const ALLOWED_PAGE_ORIGIN = 'https://johnxmj.github.io';
 const CAS_URL = 'https://webvpn.fudan.edu.cn/';
 const API_BASE = `${WEBVPN_PREFIX}/`;
+const COURSE_IDS_KEY = 'courseIds';
+const SAFE_COURSE_ID = /^[A-Za-z0-9]{1,64}$/;
 export const PLAYER_HANDSHAKE = 'PLAYER_HANDSHAKE';
 export const PLAYER_SOURCE = 'PLAYER_SOURCE';
 export const OPEN_CAS_LOGIN = 'OPEN_CAS_LOGIN';
 
 let loginTabId = null;
 let loginTabSawPrompt = false;
+
+export function parseCourseIds(value) {
+  const values = Array.isArray(value) ? value : String(value ?? '').split(/[\s,]+/);
+  return [...new Set(values
+    .map((item) => String(item ?? '').trim())
+    .filter((item) => SAFE_COURSE_ID.test(item)))];
+}
+
+async function readStoredCourseIds(storageGet) {
+  if (typeof storageGet !== 'function') return [];
+  try {
+    const result = await storageGet(COURSE_IDS_KEY);
+    return parseCourseIds(result?.[COURSE_IDS_KEY]);
+  } catch (_) {
+    return [];
+  }
+}
 
 /** Handle the small, public API exposed to the approved Pages origin. */
 export async function handleExternal(message, sender = {}, deps = {}) {
@@ -146,7 +165,9 @@ export async function openCasLogin({ tabsCreate } = {}) {
 export function createBackgroundHandlers(deps = {}) {
   const fetcher = deps.fetcher || defaultFetcher;
   const probe = deps.probe || (() => probeSession(deps));
-  const getCourseIds = deps.getCourseIds || (async () => []);
+  const storageGet = deps.storageGet
+    || globalThis.chrome?.storage?.local?.get?.bind(globalThis.chrome.storage.local);
+  const getCourseIds = deps.getCourseIds || (() => readStoredCourseIds(storageGet));
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
 
@@ -358,6 +379,26 @@ export function installRuntimeListeners(
 
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isAllowedSender(sender, false, chromeApi)) return false;
+
+    if (message?.type === 'GET_COURSE_IDS') {
+      readStoredCourseIds(chromeApi.storage?.local?.get?.bind(chromeApi.storage.local))
+        .then((courseIds) => sendResponse({ courseIds }))
+        .catch(() => sendResponse({ courseIds: [] }));
+      return true;
+    }
+
+    if (message?.type === 'SET_COURSE_IDS') {
+      const courseIds = parseCourseIds(message.courseIds);
+      const set = chromeApi.storage?.local?.set?.bind(chromeApi.storage.local);
+      if (typeof set !== 'function') {
+        sendResponse({ ok: false, error: 'storage unavailable' });
+        return false;
+      }
+      Promise.resolve(set({ [COURSE_IDS_KEY]: courseIds }))
+        .then(() => sendResponse({ ok: true, courseIds }))
+        .catch(() => sendResponse({ ok: false, error: 'storage unavailable' }));
+      return true;
+    }
 
     if (message?.type === PLAYER_HANDSHAKE) {
       try {

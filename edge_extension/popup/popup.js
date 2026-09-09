@@ -6,6 +6,8 @@ const hasDocument = typeof document !== 'undefined';
 const loginButton = hasDocument ? document.getElementById('login') : null;
 const status = hasDocument ? document.getElementById('status') : null;
 const list = hasDocument ? document.getElementById('courses') : null;
+const courseIdsInput = hasDocument ? document.getElementById('course-ids') : null;
+const saveCourseIdsButton = hasDocument ? document.getElementById('save-course-ids') : null;
 
 function renderCourses(courses) {
   if (!list) return;
@@ -33,6 +35,33 @@ async function loadLive() {
   } catch (error) { if (status) status.textContent = error.message; }
 }
 
+async function loadCourseIdSettings() {
+  if (!courseIdsInput) return;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'GET_COURSE_IDS' });
+    courseIdsInput.value = Array.isArray(result?.courseIds) ? result.courseIds.join(', ') : '';
+  } catch (_) {
+    courseIdsInput.value = '';
+  }
+}
+
+saveCourseIdsButton?.addEventListener('click', async () => {
+  if (saveCourseIdsButton) saveCourseIdsButton.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'SET_COURSE_IDS',
+      courseIds: courseIdsInput?.value || '',
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Unable to save course IDs');
+    if (status) status.textContent = 'Course IDs saved.';
+    await loadLive();
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  } finally {
+    if (saveCourseIdsButton) saveCourseIdsButton.disabled = false;
+  }
+});
+
 loginButton?.addEventListener('click', async () => {
   if (loginButton) loginButton.disabled = true;
   if (status) status.textContent = 'Opening Fudan login…';
@@ -46,4 +75,7 @@ loginButton?.addEventListener('click', async () => {
   }
 });
 
-if (hasDocument) loadLive();
+if (hasDocument) {
+  loadCourseIdSettings();
+  loadLive();
+}
