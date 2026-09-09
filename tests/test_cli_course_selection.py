@@ -23,6 +23,14 @@ def catalog_client():
 
 
 class CourseSelectionTest(unittest.TestCase):
+    def test_choose_term_allows_manual_selection_from_available_terms(self):
+        terms = [
+            {"code": "27", "name": "2026-2027 学年第一学期"},
+            {"code": "24", "name": "2025-2026 学年第二学期"},
+        ]
+        selected = cli.choose_term(terms, input_fn=Mock(side_effect=["2"]), output_fn=Mock())
+        self.assertEqual(selected, terms[1])
+
     def test_searches_name_and_teacher_and_accumulates_selected_courses(self):
         client = catalog_client()
         ask = Mock(side_effect=["数学 张老师", "1", "王老师", "1", ""])

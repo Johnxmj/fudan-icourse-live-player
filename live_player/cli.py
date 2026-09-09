@@ -192,14 +192,31 @@ def load_course_catalog(path=None):
     return {"term": str(payload.get("term") or ""), "term_name": str(payload.get("term_name") or "已保存学期"), "courses": courses}
 
 
+def choose_term(terms, *, input_fn=input, output_fn=print):
+    """Let the user choose one discovered semester by its displayed number."""
+    if not isinstance(terms, list) or not terms:
+        raise RuntimeError("official course directory has no recent semester")
+    normalized = [term for term in terms if isinstance(term, dict) and str(term.get("code") or "").strip()]
+    if not normalized:
+        raise RuntimeError("official course directory has no valid semester")
+    if len(normalized) == 1:
+        return normalized[0]
+    output_fn("可用学期：")
+    for index, term in enumerate(normalized, 1):
+        output_fn(f"{index}. {term.get('name') or term.get('code')}")
+    while True:
+        choice = input_fn("选择学期编号：").strip()
+        if choice.isascii() and choice.isdecimal() and 1 <= int(choice) <= len(normalized):
+            return normalized[int(choice) - 1]
+        output_fn("编号无效，请选择列表中的学期编号。")
+
+
 def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print):
     """Search public catalog metadata and return only the user's selected IDs."""
     if catalog is None:
         output_fn("正在读取官方课程目录，请稍候…")
         terms = client.discover_terms()
-        if not terms:
-            raise RuntimeError("official course directory has no recent semester")
-        term = terms[0]
+        term = choose_term(terms, input_fn=input_fn, output_fn=output_fn)
         courses = client.list_semester_courses(term["code"])
         term_name = term["name"]
     else:
