@@ -1,5 +1,5 @@
-import { listLiveCourses, resolveLiveSource } from './live-api.js';
-import { readCourseIds, saveCourseIds } from './course-settings.js';
+import { listFollowedCourses, listLiveCourses, resolveLiveSource } from './live-api.js';
+import { readCourseIds, readCourseSelections, saveCourseIds } from './course-settings.js';
 import { createDirectoryService, discoverRecentTerms } from './course-directory.js';
 import {
   parseRequest,
@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   CAPABILITIES,
   LIST_LIVE,
+  LIST_FOLLOWED,
   OPEN_PLAYER,
   SET_VIEW,
   REFRESH,
@@ -57,6 +58,20 @@ export async function handleExternal(message, sender = {}, deps = {}) {
       : await listLiveCourses(
         deps.fetcher || defaultFetcher,
         await (deps.getCourseIds || (async () => []))(),
+      );
+    const courses = Array.isArray(listing) ? listing : (Array.isArray(listing?.courses) ? listing.courses : []);
+    return {
+      version: PROTOCOL_VERSION,
+      ...(typeof listing?.state === 'string' ? { state: listing.state } : {}),
+      courses: courses.map(safeCourse),
+    };
+  }
+  if (request.type === LIST_FOLLOWED) {
+    const listing = deps.listFollowed
+      ? await deps.listFollowed()
+      : await listFollowedCourses(
+        deps.fetcher || defaultFetcher,
+        await (deps.getCourseSelections || (async () => []))(),
       );
     const courses = Array.isArray(listing) ? listing : (Array.isArray(listing?.courses) ? listing.courses : []);
     return {
@@ -178,6 +193,7 @@ export function createBackgroundHandlers(deps = {}) {
   const probe = deps.probe || (() => probeSession(deps));
   const storage = deps.storage || (typeof deps.storageGet === 'function' ? { get: deps.storageGet } : undefined);
   const getCourseIds = deps.getCourseIds || (() => readCourseIds(storage));
+  const getCourseSelections = deps.getCourseSelections || (() => readCourseSelections(storage));
   const directoryService = createDirectoryService({ fetchPage: params => fetcher.getCourseList(params) });
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
@@ -200,8 +216,20 @@ export function createBackgroundHandlers(deps = {}) {
     }
   }
 
+  async function listFollowedConfiguredCourses() {
+    const selections = await getCourseSelections();
+    if (!selections.length) return { state: 'unconfigured', courses: [] };
+    await refreshSession();
+    if (currentSession.state !== 'ready') return { state: currentSession.state, courses: [] };
+    const courses = deps.listFollowed
+      ? await deps.listFollowed(fetcher, selections)
+      : await listFollowedCourses(fetcher, selections);
+    return { state: 'ready', courses: courses.map(safeCourse) };
+  }
+
   return {
     getSessionState: refreshSession,
+    listFollowed: listFollowedConfiguredCourses,
     async directory(message = {}) {
       try {
         await refreshSession();
@@ -236,6 +264,9 @@ export function createBackgroundHandlers(deps = {}) {
       }
       if (request.type === LIST_LIVE) {
         return listConfiguredCourses();
+      }
+      if (request.type === LIST_FOLLOWED) {
+        return listFollowedConfiguredCourses();
       }
       if (request.type === SET_VIEW) {
         selectedView = request.payload.view;
@@ -503,6 +534,9 @@ export function installRuntimeListeners(
           : await handlers.handle({ version: PROTOCOL_VERSION, type: LIST_LIVE, payload: {} });
         return result;
       },
+      listFollowed: typeof handlers.listFollowed === 'function'
+        ? () => handlers.listFollowed()
+        : undefined,
       refresh: typeof handlers.refresh === 'function'
         ? () => handlers.refresh()
         : () => handlers.handle({ version: PROTOCOL_VERSION, type: REFRESH, payload: {} }),

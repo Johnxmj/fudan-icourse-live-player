@@ -171,6 +171,23 @@ export async function listLiveCourses(fetcher, courseIds, now = new Date()) {
   return result.sort((a, b) => a.starts_at.localeCompare(b.starts_at));
 }
 
+/** Merge saved public course metadata with the subset that is live now. */
+export async function listFollowedCourses(fetcher, selections, now = new Date()) {
+  const saved = (Array.isArray(selections) ? selections : []).map((course) => ({
+    course_id: String(course?.course_id ?? course?.courseId ?? ""),
+    course_title: String(course?.course_title ?? ""),
+    teacher: String(course?.teacher ?? ""),
+    room: "", sub_id: "", sub_title: "", starts_at: "", ends_at: "",
+    status: "offline", available_views: [],
+  })).filter(course => course.course_id);
+  if (!saved.length) return [];
+  let live = [];
+  try { live = await listLiveCourses(fetcher, saved.map(course => course.course_id), now); }
+  catch (_) { /* retain saved cards when a partial catalog probe fails */ }
+  const byId = new Map(live.map(course => [course.course_id, course]));
+  return saved.map(course => byId.get(course.course_id) || course);
+}
+
 export async function resolveLiveSource(fetcher, courseId, subId, view) {
   if (!VIEW_PATHS[view]) throw new TypeError("unknown live view");
   const info = await fetcher.getSubInfo(String(courseId), String(subId));

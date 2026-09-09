@@ -28,12 +28,12 @@
 - Extend `load_course_selection()`/`save_course_selection()` to accept `{courseIds, term, termName, courses}` while reading legacy files.
 - `select_courses()` must call `choose_term()` when no cached catalog is supplied and use the chosen term code.
 
-- [ ] Write a failing test proving `choose_term` selects the requested numbered term and rejects invalid input.
-- [ ] Run `python -m unittest tests.test_cli_course_selection -q`; expect the new test to fail because the helper is absent.
-- [ ] Implement numbered term display, validation, and last-term persistence with legacy fallback.
-- [ ] Run the focused Python tests and verify PASS.
-- [ ] Add a test proving saved course metadata and term survive a load/save round trip.
-- [ ] Run all Python tests and verify no regression.
+- [x] Write a failing test proving `choose_term` selects the requested numbered term and rejects invalid input.
+- [x] Run `python -m unittest tests.test_cli_course_selection -q`; expect the new test to fail because the helper is absent.
+- [x] Implement numbered term display, validation, and last-term persistence with legacy fallback.
+- [x] Run the focused Python tests and verify PASS.
+- [x] Add a test proving saved course metadata and term survive a load/save round trip.
+- [x] Run all Python tests and verify no regression.
 
 ### Task 2: Extension storage and resident followed-course list
 
@@ -52,11 +52,11 @@
 - Preserve `readCourseIds` and `saveCourseIds` as compatibility wrappers.
 - Add a resident “已关注课程” list in the popup, including remove/unfollow controls and the saved term.
 
-- [ ] Write failing storage tests for metadata persistence, legacy ID migration, and removal.
-- [ ] Run focused Node tests; verify the new assertions fail for the missing APIs/UI.
-- [ ] Implement the normalized storage schema and render resident list.
-- [ ] Persist the selected semester on `<select>` change and restore it on popup startup.
-- [ ] Run focused extension tests and verify PASS.
+- [x] Write failing storage tests for metadata persistence, legacy ID migration, and removal.
+- [x] Run focused Node tests; verify the new assertions fail for the missing APIs/UI.
+- [x] Implement the normalized storage schema and render resident list.
+- [x] Persist the selected semester on `<select>` change and restore it on popup startup.
+- [x] Run focused extension tests and verify PASS.
 
 ### Task 3: Unified followed-course API in extension and bridge
 
@@ -75,11 +75,11 @@
 - Add `handlers.listFollowed()` and external `LIST_FOLLOWED` handling.
 - Add `extensionTransport.listFollowed()`.
 
-- [ ] Write failing tests for merging offline metadata with live records and redacting media fields.
-- [ ] Run focused tests and verify failure.
-- [ ] Implement merge logic with bounded per-course detail requests and preserve partial failures as `unknown`.
-- [ ] Extend protocol/bridge allowlists and sanitizers.
-- [ ] Run extension and bridge tests and verify PASS.
+- [x] Write failing tests for merging offline metadata with live records and redacting media fields.
+- [x] Run focused tests and verify failure.
+- [x] Implement merge logic with bounded per-course detail requests and preserve partial failures as `unknown`.
+- [x] Extend protocol/bridge allowlists and sanitizers.
+- [x] Run extension and bridge tests and verify PASS.
 
 ### Task 4: Pages and local player render the persistent catalog
 
@@ -99,11 +99,11 @@
 - Add `listFollowed()`/`listFollowedCourses()` to local transport adapters.
 - Pages and local UI render offline cards and refuse media mounting unless the selected record is live.
 
-- [ ] Write failing UI/API tests for offline cards and the no-media click path.
-- [ ] Run focused tests and verify failure.
-- [ ] Implement local endpoint and adapter methods.
-- [ ] Update rendering and state copy for live/offline/unknown records.
-- [ ] Run focused tests and verify PASS.
+- [x] Write failing UI/API tests for offline cards and the no-media click path.
+- [x] Run focused tests and verify failure.
+- [x] Implement local endpoint and adapter methods.
+- [x] Update rendering and state copy for live/offline/unknown records.
+- [x] Run focused tests and verify PASS.
 
 ### Task 5: Documentation, build, and release verification
 
@@ -113,10 +113,10 @@
 - Modify: `tests/extension/build.test.mjs`
 - Modify: `scripts/sync_live_web.mjs` only if generated assets require synchronization.
 
-- [ ] Document the numbered semester flow, resident course list, local-only persistence, and offline card behavior.
-- [ ] Run Python unit tests.
-- [ ] Run Node live/extension/Pages tests.
-- [ ] Run `node edge_extension/scripts/build.mjs`.
-- [ ] Run `node scripts/sync_live_web.mjs --check`.
-- [ ] Run `python scripts/build_windows.py --audit-only`.
+- [x] Document the numbered semester flow, resident course list, local-only persistence, and offline card behavior.
+- [x] Run Python unit tests.
+- [x] Run Node live/extension/Pages tests.
+- [x] Run `node edge_extension/scripts/build.mjs`.
+- [x] Run `node scripts/sync_live_web.mjs --check`.
+- [x] Run `python scripts/build_windows.py --audit-only`.
 - [ ] Review the diff for secret-bearing files and commit the complete feature.

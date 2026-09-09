@@ -406,6 +406,19 @@ test('handlers read configured course IDs from extension storage', async () => {
   assert.deepEqual(calls, [['37142']]);
 });
 
+test('handlers expose saved followed courses separately from the live-only catalog', async () => {
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    getCourseSelections: async () => [{ course_id: '37142', course_title: '数学分析', teacher: '老师' }],
+    listFollowed: async () => [{ course_id: '37142', course_title: '数学分析', teacher: '老师', status: 'offline', available_views: [] }],
+  });
+  const result = await handlers.handle({ version: 1, type: 'LIST_FOLLOWED', payload: {} });
+  assert.deepEqual(result, { state: 'ready', courses: [{
+    course_id: '37142', course_title: '数学分析', teacher: '老师', room: '', sub_id: '', sub_title: '',
+    starts_at: '', ends_at: '', status: 'offline', available_views: [],
+  }] });
+});
+
 test('WebVPN home waits for a confirmed ready session before closing login tab', async () => {
   await openCasLogin({ tabsCreate: async () => ({ id: 74 }) });
   const listeners = [];

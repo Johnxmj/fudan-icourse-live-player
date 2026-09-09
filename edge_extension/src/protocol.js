@@ -3,18 +3,20 @@ export const PROTOCOL_VERSION = 1;
 
 export const CAPABILITIES = "CAPABILITIES";
 export const LIST_LIVE = "LIST_LIVE";
+export const LIST_FOLLOWED = "LIST_FOLLOWED";
 export const OPEN_PLAYER = "OPEN_PLAYER";
 export const SET_VIEW = "SET_VIEW";
 export const REFRESH = "REFRESH";
 export const LOGIN_REQUIRED = "LOGIN_REQUIRED";
 export const ERROR = "ERROR";
 
-const REQUEST_TYPES = new Set([CAPABILITIES, LIST_LIVE, OPEN_PLAYER, SET_VIEW, REFRESH]);
+const REQUEST_TYPES = new Set([CAPABILITIES, LIST_LIVE, LIST_FOLLOWED, OPEN_PLAYER, SET_VIEW, REFRESH]);
 const SAFE_VIEWS = new Set(["teacher", "student", "teacher_audio", "student_audio"]);
 const SAFE_ID = /^[A-Za-z0-9]{1,64}$/;
 const REQUEST_PAYLOAD_KEYS = new Map([
   [CAPABILITIES, []],
   [LIST_LIVE, []],
+  [LIST_FOLLOWED, []],
   [OPEN_PLAYER, ["courseId", "subId", "view"]],
   [SET_VIEW, ["view"]],
   [REFRESH, []],

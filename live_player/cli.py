@@ -41,7 +41,7 @@ def _create_client(student_id: str, password: str) -> ICourseClient:
     return ICourseClient(vpn)
 
 
-def build_application(env=None, *, session_manager=None) -> LauncherConfig:
+def build_application(env=None, *, session_manager=None, course_selections=None) -> LauncherConfig:
     env = os.environ if env is None else env
     student_id = _env_value(env, "StuId")
     password = _env_value(env, "UISPsw")
@@ -54,7 +54,9 @@ def build_application(env=None, *, session_manager=None) -> LauncherConfig:
         if item.strip()
     )
     session_manager = session_manager or SessionManager(lambda: _create_client(student_id, password))
-    application = LiveApplication(session_manager, course_ids=course_ids)
+    application = LiveApplication(
+        session_manager, course_ids=course_ids, course_selections=course_selections or (),
+    )
     bootstrap_token = application.issue_bootstrap_token(ttl_seconds=60)
     return LauncherConfig(
         application=application,
@@ -147,7 +149,7 @@ def _validated_course_ids(values):
     return result
 
 
-def load_course_selection(path=None):
+def load_course_selection(path=None, *, detailed=False):
     path = course_selection_path() if path is None else Path(path)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -155,12 +157,43 @@ def load_course_selection(path=None):
         return []
     if not isinstance(payload, dict):
         raise ValueError("invalid saved course selection")
-    return _validated_course_ids(payload.get("courseIds"))
+    course_ids = _validated_course_ids(payload.get("courseIds"))
+    if not detailed:
+        return course_ids
+    courses = []
+    for row in payload.get("courses") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            course_id = _validated_course_ids([row.get("course_id")])[0]
+        except (TypeError, ValueError):
+            continue
+        if course_id in course_ids and course_id not in {item["course_id"] for item in courses}:
+            courses.append({"course_id": course_id, **{
+                key: str(row.get(key) or "") for key in ("title", "teacher", "dept", "course_code")
+            }})
+    return {
+        "course_ids": course_ids,
+        "term": str(payload.get("term") or ""),
+        "term_name": str(payload.get("termName") or payload.get("term_name") or ""),
+        "courses": courses,
+    }
 
 
-def save_course_selection(course_ids, path=None):
+def save_course_selection(course_ids, path=None, *, term="", term_name="", courses=None):
     path = course_selection_path() if path is None else Path(path)
-    payload = {"courseIds": _validated_course_ids(course_ids)}
+    ids = _validated_course_ids(course_ids)
+    payload = {"courseIds": ids}
+    if term:
+        payload["term"] = str(term)
+    if term_name:
+        payload["termName"] = str(term_name)
+    if courses is not None:
+        by_id = {str(row.get("course_id")): row for row in courses if isinstance(row, dict)}
+        payload["courses"] = [{"course_id": course_id, **{
+            key: str(by_id.get(course_id, {}).get(key) or "")
+            for key in ("title", "teacher", "dept", "course_code")
+        }} for course_id in ids]
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -211,7 +244,7 @@ def choose_term(terms, *, input_fn=input, output_fn=print):
         output_fn("编号无效，请选择列表中的学期编号。")
 
 
-def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print):
+def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print, return_metadata=False):
     """Search public catalog metadata and return only the user's selected IDs."""
     if catalog is None:
         output_fn("正在读取官方课程目录，请稍候…")
@@ -222,6 +255,7 @@ def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print
     else:
         output_fn("正在使用已保存的官方课程目录。需要换学期时，请在课程选择页面更新目录。")
         courses = catalog["courses"]
+        term = {"code": catalog.get("term", ""), "name": catalog["term_name"]}
         term_name = catalog["term_name"]
     if not courses:
         raise RuntimeError("official course directory is empty")
@@ -231,6 +265,14 @@ def select_courses(client=None, *, catalog=None, input_fn=input, output_fn=print
         query = input_fn("课程名或教师（多个关键词用空格分隔；回车完成选择）：").strip()
         if not query:
             if selected:
+                if return_metadata:
+                    selected_set = set(selected)
+                    return {
+                        "course_ids": selected,
+                        "term": str(term.get("code") or ""),
+                        "term_name": str(term.get("name") or ""),
+                        "courses": [course for course in courses if str(course.get("course_id")) in selected_set],
+                    }
                 return selected
             output_fn("请先搜索并选择至少一门课程。")
             continue
@@ -274,13 +316,16 @@ def main(argv=None, env=None) -> int:
     args = parser.parse_args(argv)
     values = dict(os.environ if env is None else env)
     session_manager = None
+    saved_metadata = ()
     try:
         if not args.select_courses and not _env_value(values, "COURSE_IDS"):
             try:
-                saved = load_course_selection()
-                if saved:
-                    values["COURSE_IDS"] = ",".join(saved)
-                    print(f"已读取保存的 {len(saved)} 门课程。需要调整时使用 --select-courses。")
+                saved = load_course_selection(detailed=True)
+                saved_ids = saved.get("course_ids", []) if isinstance(saved, dict) else saved
+                if saved_ids:
+                    saved_metadata = saved.get("courses", ()) if isinstance(saved, dict) else ()
+                    values["COURSE_IDS"] = ",".join(saved_ids)
+                    print(f"已读取保存的 {len(saved_ids)} 门课程。需要调整时使用 --select-courses。")
             except (OSError, ValueError):
                 print("已保存的课程选择无法读取，本次将重新选择课程。", file=sys.stderr)
         if args.interactive or args.select_courses:
@@ -295,17 +340,23 @@ def main(argv=None, env=None) -> int:
                     cached_catalog = None
                     print("已保存的课程目录不完整，本次将重新读取官方目录。", file=sys.stderr)
                 if cached_catalog is not None:
-                    ids = select_courses(catalog=cached_catalog)
+                    selection = select_courses(catalog=cached_catalog, return_metadata=True)
                 else:
                     session_manager = SessionManager(lambda: _create_client(student_id, password))
-                    ids = session_manager.call(select_courses)
+                    selection = session_manager.call(lambda client: select_courses(client, return_metadata=True))
+                if isinstance(selection, dict):
+                    ids = selection["course_ids"]
+                    saved_metadata = selection.get("courses") or ()
+                else:  # compatibility with callers that wrap the legacy list API
+                    ids = _validated_course_ids(selection)
+                    selection = {"course_ids": ids, "term": "", "term_name": "", "courses": None}
                 values["COURSE_IDS"] = ",".join(ids)
                 try:
-                    save_course_selection(ids)
+                    save_course_selection(ids, term=selection.get("term"), term_name=selection.get("term_name"), courses=selection.get("courses"))
                 except OSError:
                     print("课程已选好，但当前目录无法保存选择；下次启动需要重新选择。", file=sys.stderr)
         # Create the one-use bootstrap only after the interactive selection ends.
-        config = build_application(values, session_manager=session_manager)
+        config = build_application(values, session_manager=session_manager, course_selections=saved_metadata)
     except (ValueError, EOFError):
         print("尚未配置登录信息。请使用 --interactive 按提示启动，或设置 StuId / UISPsw。", file=sys.stderr)
         return 2

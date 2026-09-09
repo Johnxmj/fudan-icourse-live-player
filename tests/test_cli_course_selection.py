@@ -62,6 +62,18 @@ class CourseSelectionTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"courseIds": ["101", "103"]})
             self.assertEqual(cli.load_course_selection(path), ["101", "103"])
 
+    def test_saved_course_metadata_and_term_survive_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "course-selection.json"
+            cli.save_course_selection(
+                ["101"], path, term="27", term_name="2026-2027 学年第一学期", courses=CATALOG,
+            )
+            detailed = cli.load_course_selection(path, detailed=True)
+            self.assertEqual(detailed["course_ids"], ["101"])
+            self.assertEqual(detailed["term"], "27")
+            self.assertEqual(detailed["term_name"], "2026-2027 学年第一学期")
+            self.assertEqual(detailed["courses"], [{**CATALOG[0], "course_code": ""}])
+
     def test_missing_selection_is_empty_but_invalid_identifiers_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "course-selection.json"

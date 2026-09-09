@@ -417,7 +417,7 @@ test("keeps the one-refresh budget after reloading playback", async () => {
 
   await waitFor(
     () =>
-      transport.calls.filter((call) => call.url.endsWith("/api/live-courses")).length === 2 &&
+      transport.calls.filter((call) => call.url.endsWith("/api/followed-courses")).length === 2 &&
       FakeHls.instances.length === 2 &&
       api.state.recovery.refreshAttempts === 1,
     "expected one complete recovery cycle after the first fatal playback sequence",
@@ -466,7 +466,7 @@ test("redeems bootstrap tokens from the URL before loading courses", async () =>
   assert.equal(transport.calls[0].init.method, "POST");
   assert.equal(transport.calls[0].init.headers["Content-Type"], "application/json");
   assert.equal(JSON.parse(transport.calls[0].init.body).bootstrap_token, "bootstrap-token");
-  assert.equal(transport.calls[1].url, "http://127.0.0.1:4310/api/live-courses");
+  assert.equal(transport.calls[1].url, "http://127.0.0.1:4310/api/followed-courses");
   assert.equal(transport.calls[1].init.headers.Authorization, "Bearer session-token");
   assert.ok(FakeHls.instances[0].sources[0].includes("media_token=media-token"));
   assert.equal(api.state.token, "session-token");
