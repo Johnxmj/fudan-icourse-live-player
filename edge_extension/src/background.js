@@ -170,7 +170,10 @@ export async function probeSession(deps = {}) {
       return { state: 'login-required' };
     }
     const code = result?.body?.code;
-    if (result?.httpStatus === 200 && [0, 200, '0', '200'].includes(code)) {
+    const hasAuthenticatedPayload = result?.body && typeof result.body === 'object'
+      && (Object.prototype.hasOwnProperty.call(result.body, 'data')
+        || Object.prototype.hasOwnProperty.call(result.body, 'params'));
+    if (result?.httpStatus === 200 && ([0, 200, '0', '200'].includes(code) || hasAuthenticatedPayload)) {
       return { state: 'ready' };
     }
     return { state: 'failed' };
@@ -237,13 +240,19 @@ export function createBackgroundHandlers(deps = {}) {
     async directory(message = {}) {
       try {
         await refreshSession();
-        if (currentSession.state !== 'ready') return { state: currentSession.state };
+        // The lightweight session probe can be rejected by a stale WebVPN
+        // route even when the directory endpoint is already usable. Keep the
+        // hard login-required result, but let the authoritative directory
+        // request confirm a recoverable session.
+        if (currentSession.state === 'login-required') return { state: 'login-required' };
         if (message.type === 'GET_DIRECTORY_TERMS') {
           const result = await fetcher.getDirectoryTerms();
+          currentSession = { state: 'ready' };
           return { state: 'ready', terms: result.terms, currentTerm: result.currentTerm };
         }
         if (message.type !== 'SEARCH_COURSES') return { state: 'failed' };
         const result = await directoryService.search({ term: message.term, query: message.query, page: message.page, perPage: message.perPage });
+        currentSession = { state: 'ready' };
         return { state: 'ready', ...result };
       } catch (error) {
         return { state: error?.state === 'login-required' ? 'login-required' : 'failed' };
