@@ -679,6 +679,15 @@ test('directory login failure skips all catalog requests and remains actionable'
   assert.deepEqual(await handlers.directory({ type: 'SEARCH_COURSES', term: 'term1', query: '' }), { state: 'login-required' });
 });
 
+test('directory endpoint can confirm a session when the lightweight probe is inconclusive', async () => {
+  const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'failed' }), fetcher: {
+    async getDirectoryTerms() { return { terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1' }; },
+  } });
+  assert.deepEqual(await handlers.directory({ type: 'GET_DIRECTORY_TERMS' }), {
+    state: 'ready', terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1',
+  });
+});
+
 test('directory search uses the official paginated portal endpoint with the selected term', async () => {
   const previousFetch = globalThis.fetch;
   const calls = [];
