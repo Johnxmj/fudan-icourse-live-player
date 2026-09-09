@@ -2,11 +2,10 @@
 iCourse API client for Fudan University's smart teaching platform.
 
 Provides access to course details, lecture lists, video URLs,
-and video downloads through WebVPN.
+and current-live stream metadata through WebVPN.
 """
 
 import hashlib
-import os
 import re
 import time
 import uuid
@@ -25,32 +24,6 @@ def _extract_date_from_sub(sub_title: str) -> str | None:
         return None
     m = _DATE_FROM_SUB_RE.match(sub_title)
     return m.group(1) if m else None
-
-def fetch_ppt_image(client: "ICourseClient", item: dict,
-                    max_attempts: int = 2, timeout: int = 30) -> bytes | None:
-    """Download a single PPT image. Returns bytes or None on persistent failure.
-
-    Module-level (not a method on ICourseClient) so worker threads in the
-    scheduler can call it without binding the function name at import time —
-    that way tests can monkey-patch ``src.icourse.fetch_ppt_image`` and the
-    scheduler will pick up the replacement on its next worker invocation.
-    """
-    url = item["pptimgurl"]
-    for attempt in range(1, max_attempts + 1):
-        try:
-            if url.startswith(config.WEBVPN_BASE):
-                resp = client.vpn.get_raw(url, timeout=timeout)
-            else:
-                resp = client.vpn.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return resp.content
-        except Exception as e:
-            print(f"[PPTFetcher] download failed (attempt "
-                  f"{attempt}/{max_attempts}): {type(e).__name__}: {e}")
-            if attempt < max_attempts:
-                time.sleep(1)
-    return None
-
 
 class ICourseClient:
     """Client for the iCourse API, operating through WebVPN."""
@@ -559,56 +532,3 @@ class ICourseClient:
         headers = f"Cookie: {cookies}\r\nUser-Agent: {config.USER_AGENT}\r\n"
         return vpn_url, headers
 
-    def download_video(
-        self,
-        video_url: str,
-        output_path: str,
-        chunk_size: int = 8192,
-    ) -> str:
-        """Download a video file from the given URL.
-
-        If video_url is a WebVPN URL, uses get_raw; otherwise uses get.
-        Returns the output file path.
-        """
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-
-        tmp_path = output_path + ".tmp"
-        t0 = time.time()
-
-        if video_url.startswith(config.WEBVPN_BASE):
-            resp = self.vpn.get_raw(video_url, stream=True, timeout=300)
-        else:
-            resp = self.vpn.get(video_url, stream=True, timeout=300)
-
-        resp.raise_for_status()
-
-        total = int(resp.headers.get("content-length", 0))
-        downloaded = 0
-
-        with open(tmp_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=chunk_size):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded * 100 // total
-                    print(
-                        f"\r    Downloading: {pct}% "
-                        f"({downloaded // 1024 // 1024}MB/"
-                        f"{total // 1024 // 1024}MB)",
-                        end="",
-                        flush=True,
-                    )
-
-        print()  # newline after progress
-
-        if total and downloaded < total:
-            os.remove(tmp_path)
-            raise RuntimeError(
-                f"Incomplete download: got {downloaded} of {total} bytes"
-            )
-
-        os.replace(tmp_path, output_path)
-        elapsed = time.time() - t0
-        size_mb = downloaded / (1024 * 1024)
-        print(f"    Downloaded: {size_mb:.1f}MB in {elapsed:.0f}s")
-        return output_path
