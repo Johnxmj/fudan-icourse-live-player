@@ -406,23 +406,6 @@ test('handlers read configured course IDs from extension storage', async () => {
   assert.deepEqual(calls, [['37142']]);
 });
 
-test('probeSession accepts an authenticated infosimple payload without a top-level code', async () => {
-  assert.deepEqual(await probeSession({ fetchJson: async () => ({ httpStatus: 200, body: { data: { id: 'student' } } }) }), { state: 'ready' });
-});
-
-test('handlers expose saved followed courses separately from the live-only catalog', async () => {
-  const handlers = createBackgroundHandlers({
-    probe: async () => ({ state: 'ready' }),
-    getCourseSelections: async () => [{ course_id: '37142', course_title: '数学分析', teacher: '老师' }],
-    listFollowed: async () => [{ course_id: '37142', course_title: '数学分析', teacher: '老师', status: 'offline', available_views: [] }],
-  });
-  const result = await handlers.handle({ version: 1, type: 'LIST_FOLLOWED', payload: {} });
-  assert.deepEqual(result, { state: 'ready', courses: [{
-    course_id: '37142', course_title: '数学分析', teacher: '老师', room: '', sub_id: '', sub_title: '',
-    starts_at: '', ends_at: '', status: 'offline', available_views: [],
-  }] });
-});
-
 test('WebVPN home waits for a confirmed ready session before closing login tab', async () => {
   await openCasLogin({ tabsCreate: async () => ({ id: 74 }) });
   const listeners = [];
@@ -681,15 +664,6 @@ test('directory login failure skips all catalog requests and remains actionable'
   } });
   assert.equal(typeof handlers.directory, 'function');
   assert.deepEqual(await handlers.directory({ type: 'SEARCH_COURSES', term: 'term1', query: '' }), { state: 'login-required' });
-});
-
-test('directory endpoint can confirm a session when the lightweight probe is inconclusive', async () => {
-  const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'failed' }), fetcher: {
-    async getDirectoryTerms() { return { terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1' }; },
-  } });
-  assert.deepEqual(await handlers.directory({ type: 'GET_DIRECTORY_TERMS' }), {
-    state: 'ready', terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1',
-  });
 });
 
 test('directory search uses the official paginated portal endpoint with the selected term', async () => {

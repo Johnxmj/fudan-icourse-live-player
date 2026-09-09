@@ -101,17 +101,6 @@ test("probe and listLive use versioned extension messages", async () => {
   ]);
 });
 
-test("listFollowed uses the persistent catalog request and preserves offline status", async () => {
-  const calls = [];
-  const runtime = { sendMessage: async (...args) => { calls.push(args); return { version: 1, state: "ready", courses: [{ course_id: "c1", course_title: "课程", status: "offline" }] }; } };
-  const transport = createExtensionTransport({ extensionId: EXTENSION_ID, runtime });
-  assert.deepEqual(await transport.listFollowed(), [{
-    course_id: "c1", course_title: "课程", teacher: "", room: "", sub_id: "", sub_title: "",
-    starts_at: "", ends_at: "", status: "offline", available_views: [],
-  }]);
-  assert.deepEqual(calls, [[EXTENSION_ID, { version: 1, type: "LIST_FOLLOWED" }]]);
-});
-
 test("probe preserves external login and failed states for Pages", async () => {
   for (const state of ["login-required", "failed"]) {
     const transport = createExtensionTransport({

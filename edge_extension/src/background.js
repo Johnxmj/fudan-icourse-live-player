@@ -1,5 +1,5 @@
-import { listFollowedCourses, listLiveCourses, resolveLiveSource } from './live-api.js';
-import { readCourseIds, readCourseSelections, saveCourseIds } from './course-settings.js';
+import { listLiveCourses, resolveLiveSource } from './live-api.js';
+import { readCourseIds, saveCourseIds } from './course-settings.js';
 import { createDirectoryService, discoverRecentTerms } from './course-directory.js';
 import {
   parseRequest,
@@ -7,7 +7,6 @@ import {
   PROTOCOL_VERSION,
   CAPABILITIES,
   LIST_LIVE,
-  LIST_FOLLOWED,
   OPEN_PLAYER,
   SET_VIEW,
   REFRESH,
@@ -58,20 +57,6 @@ export async function handleExternal(message, sender = {}, deps = {}) {
       : await listLiveCourses(
         deps.fetcher || defaultFetcher,
         await (deps.getCourseIds || (async () => []))(),
-      );
-    const courses = Array.isArray(listing) ? listing : (Array.isArray(listing?.courses) ? listing.courses : []);
-    return {
-      version: PROTOCOL_VERSION,
-      ...(typeof listing?.state === 'string' ? { state: listing.state } : {}),
-      courses: courses.map(safeCourse),
-    };
-  }
-  if (request.type === LIST_FOLLOWED) {
-    const listing = deps.listFollowed
-      ? await deps.listFollowed()
-      : await listFollowedCourses(
-        deps.fetcher || defaultFetcher,
-        await (deps.getCourseSelections || (async () => []))(),
       );
     const courses = Array.isArray(listing) ? listing : (Array.isArray(listing?.courses) ? listing.courses : []);
     return {
@@ -170,10 +155,7 @@ export async function probeSession(deps = {}) {
       return { state: 'login-required' };
     }
     const code = result?.body?.code;
-    const hasAuthenticatedPayload = result?.body && typeof result.body === 'object'
-      && (Object.prototype.hasOwnProperty.call(result.body, 'data')
-        || Object.prototype.hasOwnProperty.call(result.body, 'params'));
-    if (result?.httpStatus === 200 && ([0, 200, '0', '200'].includes(code) || hasAuthenticatedPayload)) {
+    if (result?.httpStatus === 200 && [0, 200, '0', '200'].includes(code)) {
       return { state: 'ready' };
     }
     return { state: 'failed' };
@@ -196,7 +178,6 @@ export function createBackgroundHandlers(deps = {}) {
   const probe = deps.probe || (() => probeSession(deps));
   const storage = deps.storage || (typeof deps.storageGet === 'function' ? { get: deps.storageGet } : undefined);
   const getCourseIds = deps.getCourseIds || (() => readCourseIds(storage));
-  const getCourseSelections = deps.getCourseSelections || (() => readCourseSelections(storage));
   const directoryService = createDirectoryService({ fetchPage: params => fetcher.getCourseList(params) });
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
@@ -219,40 +200,18 @@ export function createBackgroundHandlers(deps = {}) {
     }
   }
 
-  async function listFollowedConfiguredCourses() {
-    const selections = await getCourseSelections();
-    if (!selections.length) return { state: 'unconfigured', courses: [] };
-    await refreshSession();
-    if (currentSession.state !== 'ready') return { state: currentSession.state, courses: [] };
-    try {
-      const courses = deps.listFollowed
-        ? await deps.listFollowed(fetcher, selections)
-        : await listFollowedCourses(fetcher, selections);
-      return { state: 'ready', courses: courses.map(safeCourse) };
-    } catch (error) {
-      return { state: error?.state === 'login-required' ? 'login-required' : 'failed', courses: [] };
-    }
-  }
-
   return {
     getSessionState: refreshSession,
-    listFollowed: listFollowedConfiguredCourses,
     async directory(message = {}) {
       try {
         await refreshSession();
-        // The lightweight session probe can be rejected by a stale WebVPN
-        // route even when the directory endpoint is already usable. Keep the
-        // hard login-required result, but let the authoritative directory
-        // request confirm a recoverable session.
-        if (currentSession.state === 'login-required') return { state: 'login-required' };
+        if (currentSession.state !== 'ready') return { state: currentSession.state };
         if (message.type === 'GET_DIRECTORY_TERMS') {
           const result = await fetcher.getDirectoryTerms();
-          currentSession = { state: 'ready' };
           return { state: 'ready', terms: result.terms, currentTerm: result.currentTerm };
         }
         if (message.type !== 'SEARCH_COURSES') return { state: 'failed' };
         const result = await directoryService.search({ term: message.term, query: message.query, page: message.page, perPage: message.perPage });
-        currentSession = { state: 'ready' };
         return { state: 'ready', ...result };
       } catch (error) {
         return { state: error?.state === 'login-required' ? 'login-required' : 'failed' };
@@ -277,9 +236,6 @@ export function createBackgroundHandlers(deps = {}) {
       }
       if (request.type === LIST_LIVE) {
         return listConfiguredCourses();
-      }
-      if (request.type === LIST_FOLLOWED) {
-        return listFollowedConfiguredCourses();
       }
       if (request.type === SET_VIEW) {
         selectedView = request.payload.view;
@@ -547,9 +503,6 @@ export function installRuntimeListeners(
           : await handlers.handle({ version: PROTOCOL_VERSION, type: LIST_LIVE, payload: {} });
         return result;
       },
-      listFollowed: typeof handlers.listFollowed === 'function'
-        ? () => handlers.listFollowed()
-        : undefined,
       refresh: typeof handlers.refresh === 'function'
         ? () => handlers.refresh()
         : () => handlers.handle({ version: PROTOCOL_VERSION, type: REFRESH, payload: {} }),

@@ -113,9 +113,6 @@ export function createLocalTransport(baseUrl, token, options = {}) {
     listLiveCourses() {
       return requestJson("/api/live-courses");
     },
-    listFollowedCourses() {
-      return requestJson("/api/followed-courses");
-    },
     refreshLiveCourses() {
       return requestJson("/api/live-courses");
     },
