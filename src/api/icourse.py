@@ -531,4 +531,3 @@ class ICourseClient:
         )
         headers = f"Cookie: {cookies}\r\nUser-Agent: {config.USER_AGENT}\r\n"
         return vpn_url, headers
-
