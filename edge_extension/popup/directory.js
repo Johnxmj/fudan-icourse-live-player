@@ -10,6 +10,7 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   const results = document.getElementById('directory-results');
   const status = document.getElementById('directory-status');
   const count = document.getElementById('directory-followed');
+  const followedTerm = document.getElementById('directory-followed-term');
   const followedList = document.getElementById('directory-followed-list');
   const previous = document.getElementById('directory-previous');
   const next = document.getElementById('directory-next');
@@ -19,16 +20,28 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   let currentCourses = [];
   let page = 1;
   let generation = 0;
+  let selectedTerm = null;
 
   function updateSelectionState() {
     const projected = new Map(saved);
     for (const [id, selected] of changes) { if (selected) projected.set(id, projected.get(id) || { course_id: id }); else projected.delete(id); }
     count.textContent = `已关注 ${saved.size} 门课程${changes.size ? `，保存后为 ${projected.size} 门` : ''}。`;
+    if (followedTerm) followedTerm.textContent = selectedTerm ? `保存学期：${selectedTerm.title || selectedTerm.id}` : '保存学期：未选择';
     saveButton.disabled = changes.size === 0;
     if (followedList) {
       followedList.replaceChildren(...[...projected.values()].map(course => {
         const item = document.createElement('li');
-        item.textContent = `${course.course_title || '课程 ' + course.course_id}${course.teacher ? ` · ${course.teacher}` : ''}`;
+        const label = document.createElement('span');
+        label.textContent = `${course.course_title || '课程 ' + course.course_id}${course.teacher ? ` · ${course.teacher}` : ''}`;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '取消关注';
+        remove.addEventListener('click', () => {
+          if (saved.has(course.course_id)) changes.set(course.course_id, false);
+          else changes.delete(course.course_id);
+          updateSelectionState();
+        });
+        item.append(label, remove);
         return item;
       }));
     }
@@ -87,6 +100,9 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
       const remembered = await readSelectedTerm(storage);
       const preferred = remembered?.id || result.currentTerm;
       term.value = result.terms.some(item => item.id === preferred) ? preferred : result.terms[0].id;
+      const selected = result.terms.find(item => item.id === term.value);
+      selectedTerm = selected ? { id: selected.id, title: selected.title } : remembered;
+      updateSelectionState();
       searchButton.disabled = false;
       status.textContent = '已识别最近课程所属学期。输入课程名、教师、学院或课程代码后搜索；留空可浏览本学期可见课程。';
     } catch (_) { if (current === generation) showError(); }
@@ -146,6 +162,7 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   query.addEventListener('input', resetSearch);
   term.addEventListener('change', () => {
     const option = [...(term.options || [])].find(item => item.value === term.value);
+    selectedTerm = { id: term.value, title: option?.textContent || '' };
     if (storage?.set) void saveSelectedTerm({ id: term.value, title: option?.textContent || '' }, storage);
     resetSearch();
   });

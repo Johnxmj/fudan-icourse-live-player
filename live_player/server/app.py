@@ -307,8 +307,11 @@ class LiveApplication:
                     self.session_manager.get_client()
                 except Exception:
                     return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
-                live = self.session_manager.call(lambda client: discover_live_courses(
-                    client, resolve_course_ids(client, self.course_ids, self.term)))
+                try:
+                    live = self.session_manager.call(lambda client: discover_live_courses(
+                        client, resolve_course_ids(client, self.course_ids, self.term)))
+                except RuntimeError:
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
                 live_by_id = {item.course_id: item for item in live}
                 saved_by_id = {
                     str(item.get("course_id")): item for item in self.course_selections

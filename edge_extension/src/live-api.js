@@ -181,11 +181,17 @@ export async function listFollowedCourses(fetcher, selections, now = new Date())
     status: "offline", available_views: [],
   })).filter(course => course.course_id);
   if (!saved.length) return [];
-  let live = [];
-  try { live = await listLiveCourses(fetcher, saved.map(course => course.course_id), now); }
-  catch (_) { /* retain saved cards when a partial catalog probe fails */ }
-  const byId = new Map(live.map(course => [course.course_id, course]));
-  return saved.map(course => byId.get(course.course_id) || course);
+  const result = [];
+  for (const course of saved) {
+    try {
+      const live = await listLiveCourses(fetcher, [course.course_id], now);
+      result.push(live[0] || course);
+    } catch (error) {
+      if (error?.state === 'login-required') throw error;
+      result.push({ ...course, status: 'unknown' });
+    }
+  }
+  return result;
 }
 
 export async function resolveLiveSource(fetcher, courseId, subId, view) {

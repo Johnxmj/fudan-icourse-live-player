@@ -221,10 +221,14 @@ export function createBackgroundHandlers(deps = {}) {
     if (!selections.length) return { state: 'unconfigured', courses: [] };
     await refreshSession();
     if (currentSession.state !== 'ready') return { state: currentSession.state, courses: [] };
-    const courses = deps.listFollowed
-      ? await deps.listFollowed(fetcher, selections)
-      : await listFollowedCourses(fetcher, selections);
-    return { state: 'ready', courses: courses.map(safeCourse) };
+    try {
+      const courses = deps.listFollowed
+        ? await deps.listFollowed(fetcher, selections)
+        : await listFollowedCourses(fetcher, selections);
+      return { state: 'ready', courses: courses.map(safeCourse) };
+    } catch (error) {
+      return { state: error?.state === 'login-required' ? 'login-required' : 'failed', courses: [] };
+    }
   }
 
   return {
