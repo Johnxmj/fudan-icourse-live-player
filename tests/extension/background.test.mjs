@@ -7,6 +7,7 @@ import {
   createBackgroundHandlers,
   handleExternalOpenPlayer,
   isLoginCompleteUrl,
+  installLoginTabWatcher,
   installRuntimeListeners,
 } from '../../edge_extension/src/background.js';
 
@@ -383,8 +384,30 @@ test('external LIST_LIVE uses the authenticated background catalog', async () =>
 test('login completion recognizes direct iCourse and routed WebVPN URLs', () => {
   assert.equal(isLoginCompleteUrl('https://icourse.fudan.edu.cn/'), true);
   assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/https/77726476706e69737468656265737421f9f44e8935236d1e781d8dad961b2631a501f26f/courseapi/v3'), true);
-  assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/'), false);
+  assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/'), true);
   assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/login'), false);
+});
+
+test('WebVPN home waits for a confirmed ready session before closing login tab', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 74 }) });
+  const listeners = [];
+  const removed = [];
+  let state = 'login-required';
+  installLoginTabWatcher({
+    tabs: {
+      onUpdated: { addListener(listener) { listeners.push(listener); } },
+      remove: async (tabId) => removed.push(tabId),
+    },
+  }, { refresh: async () => ({ state }) });
+
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, []);
+
+  state = 'ready';
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, [74]);
 });
 
 test('CAS completion closes only the created tab and refreshes handlers', async () => {
