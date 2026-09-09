@@ -24,7 +24,7 @@ async function withHistory(location, callback) {
 }
 
 test("local transport reads pairing only from the fragment", async () => {
-  const location = new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
+  const location = new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
   await withHistory(location, async () => {
     const transport = createLocalTransport(location, async () => response({ token: "session" }));
     assert.equal(transport.baseUrl, "http://127.0.0.1:43123");
@@ -52,7 +52,7 @@ test("clears a fragment when the bridge URL is malformed", () => {
 });
 
 test("removes the pairing fragment before the exchange and keeps it removed on failure", async () => {
-  const location = new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
+  const location = new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
   await withHistory(location, async (historyCalls) => {
     let hashAtFetch = "unset";
     const transport = createLocalTransport(location, async () => {
@@ -63,12 +63,12 @@ test("removes the pairing fragment before the exchange and keeps it removed on f
     assert.equal(hashAtFetch, "");
     await assert.rejects(transport.ready, /bridge unavailable/);
     assert.equal(location.hash, "");
-    assert.deepEqual(historyCalls, ["/Fudan_iCourse_Subscriber/live/"]);
+    assert.deepEqual(historyCalls, ["/fudan-icourse-live-player/live/"]);
   });
 });
 
 test("exchanges bootstrap once, then uses only the in-memory bearer", async () => {
-  const location = new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
+  const location = new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
   const calls = [];
   await withHistory(location, async () => {
     const transport = createLocalTransport(location, async (url, init) => {

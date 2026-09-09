@@ -80,7 +80,7 @@ def launch_player(config: LauncherConfig, *, pages=False):
     if pages:
         from urllib.parse import quote
         bridge = quote(f"http://{host}:{port}", safe="")
-        url = f"https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/#bridge={bridge}&bootstrap={quote(config.bootstrap_token, safe='')}"
+        url = f"https://johnxmj.github.io/fudan-icourse-live-player/live/#bridge={bridge}&bootstrap={quote(config.bootstrap_token, safe='')}"
     else:
         url = f"http://{host}:{port}/?bootstrap={config.bootstrap_token}"
     started = False

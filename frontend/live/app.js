@@ -15,8 +15,8 @@ export const LIVE_STATES = Object.freeze([
 ]);
 
 export const ACTION_URLS = Object.freeze({
-  extension: "https://github.com/Johnxmj/Fudan_iCourse_Subscriber#edge-current-live-extension-developer-mode",
-  local: "https://github.com/Johnxmj/Fudan_iCourse_Subscriber#本地直播预览",
+  extension: "https://github.com/Johnxmj/fudan-icourse-live-player#edge-current-live-extension-developer-mode",
+  local: "https://github.com/Johnxmj/fudan-icourse-live-player#本地直播预览",
 });
 
 export async function detectTransport(adapters = []) {

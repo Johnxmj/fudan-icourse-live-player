@@ -128,7 +128,7 @@ class LauncherTest(unittest.TestCase):
         url = browser_open.call_args.args[0]
         self.assertEqual(
             url,
-            "https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/"
+            "https://johnxmj.github.io/fudan-icourse-live-player/live/"
             "#bridge=http%3A%2F%2F127.0.0.1%3A53123&bootstrap=bootstrap-token",
         )
         self.assertNotIn("?", url.split("#", 1)[0])

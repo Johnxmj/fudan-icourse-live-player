@@ -30,7 +30,7 @@ test("disconnected state offers exactly extension and local-player actions", () 
   assert.match(markup, /Edge extension/i);
   assert.match(markup, /Windows local player/i);
   assert.equal((markup.match(/<button\b/g) || []).length, 2);
-  assert.match(markup, /data-action-url="https:\/\/github\.com\/Johnxmj\/Fudan_iCourse_Subscriber/);
+  assert.match(markup, /data-action-url="https:\/\/github\.com\/Johnxmj\/fudan-icourse-live-player/);
   assert.doesNotMatch(markup, /password|cookie|signed url/i);
 });
 
@@ -53,8 +53,8 @@ test("disconnected actions open safe setup guidance", () => {
   buttons[1].listeners.click();
 
   assert.deepEqual(opened.map((entry) => entry.url), [
-    "https://github.com/Johnxmj/Fudan_iCourse_Subscriber#edge-current-live-extension-developer-mode",
-    "https://github.com/Johnxmj/Fudan_iCourse_Subscriber#本地直播预览",
+    "https://github.com/Johnxmj/fudan-icourse-live-player#edge-current-live-extension-developer-mode",
+    "https://github.com/Johnxmj/fudan-icourse-live-player#本地直播预览",
   ]);
   assert.deepEqual(opened.map((entry) => entry.target), ["_blank", "_blank"]);
   assert.ok(opened.every((entry) => /noopener/.test(entry.features)));
@@ -76,7 +76,7 @@ test("boot renders disconnected when a transport factory throws synchronously", 
 
   await boot({
     documentRef,
-    windowRef: { location: new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/") },
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
     extensionFactory() { throw new Error("extension unavailable"); },
     localFactory() { throw new Error("local unavailable"); },
   });
@@ -109,7 +109,7 @@ test("boot wires the approved extension ID into the default adapter", async () =
 
   await boot({
     documentRef,
-    windowRef: { location: new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/") },
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
     runtime,
     extensionFactory: undefined,
     localFactory: undefined,
@@ -141,7 +141,7 @@ test("boot propagates extension login-required state", async () => {
   };
   await boot({
     documentRef,
-    windowRef: { location: new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/") },
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
     extensionFactory: () => ({
       name: "extension",
       probe: async () => true,
@@ -168,7 +168,7 @@ test("boot propagates extension failed state", async () => {
   };
   await boot({
     documentRef,
-    windowRef: { location: new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/") },
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
     extensionFactory: () => ({
       name: "extension",
       probe: async () => true,
@@ -195,7 +195,7 @@ test("boot renders empty when a ready extension has no current courses", async (
   };
   await boot({
     documentRef,
-    windowRef: { location: new URL("https://johnxmj.github.io/Fudan_iCourse_Subscriber/live/") },
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
     extensionFactory: () => ({
       name: "extension",
       probe: async () => true,
