@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Live Player</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div class="shell" data-live-player-root>
+    <div class="shell__backdrop" data-rail-backdrop aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <p class="brand__eyebrow">Fudan iCourse</p>
+        <h1>Live Player</h1>
+        <p class="brand__sub">Current-live only. No archive. No download.</p>
+      </div>
+
+      <div class="connect">
+        <label class="field">
+          <span>Base URL</span>
+          <input data-base-url type="url" spellcheck="false" autocomplete="off" inputmode="url" placeholder="http://127.0.0.1:8000">
+        </label>
+        <label class="field field--token">
+          <span>Session token</span>
+          <input data-token type="password" spellcheck="false" autocomplete="off" placeholder="Paste the local session token">
+        </label>
+        <button class="button button--ghost" data-connect type="button">Connect</button>
+      </div>
+
+      <div class="topbar__actions">
+        <button class="button button--ghost rail-toggle" data-rail-toggle type="button" aria-expanded="false">Courses</button>
+        <button class="button button--ghost" data-refresh type="button">Refresh</button>
+        <button class="button button--solid" data-fullscreen type="button">Fullscreen</button>
+      </div>
+    </header>
+
+    <main class="surface">
+      <aside class="rail" data-rail aria-label="Current live courses">
+        <div class="rail__head">
+          <div>
+            <p class="rail__eyebrow">Live rail</p>
+            <h2>Current courses</h2>
+          </div>
+          <span class="rail__count" data-course-count>0 live</span>
+        </div>
+        <div class="rail__list" data-rail-list></div>
+      </aside>
+
+      <section class="stage" data-stage>
+        <div class="stage__screen">
+          <video data-video class="stage__video" controls playsinline></video>
+          <div class="stage__badge">Live only</div>
+        </div>
+
+        <div class="stage__meta">
+          <div class="stage__copy">
+            <p class="stage__eyebrow" data-course-badge>idle</p>
+            <h2 data-course-title>Choose a live course</h2>
+            <p class="stage__sub" data-course-meta>The player stays scoped to the current live session only.</p>
+          </div>
+          <button class="button button--ghost stage__mini" data-refresh type="button">Refresh</button>
+        </div>
+
+        <p class="status" data-status aria-live="polite">Connect to the local API to load live courses.</p>
+        <p class="connection-hint" data-connection-hint></p>
+
+        <div class="view-hint-line">
+          <span data-view-hint>Available stream views appear here after a course is selected.</span>
+          <span data-preview-line>Select a course to load its stream.</span>
+        </div>
+
+        <div class="view-bar" data-view-bar></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./vendor/hls.min.js"></script>
+  <script type="module">
+    import { mountLivePlayerApp } from "./app.js";
+    mountLivePlayerApp();
+  </script>
+</body>
+</html>

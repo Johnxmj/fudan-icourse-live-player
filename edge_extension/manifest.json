@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Fudan iCourse Live Player",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnLnGRzwJiL9Gw5Ybw6qLFixZJUDfmZCdSqBAgdha7hfbqH+O95V9oOrhA4JWlFGqgX7xzTmHzAOYX1gdCbLtE2S5D5hu0aHkcDA+D0L6XT0vYbXHI2NqvLYTW3jEDWMLvqJjArwRf4bNDTA2CUcIyAZu3zQrxPwJW7Dtw1rk0tBtPLE8qAszRrdEMpfwE0hTiLB4GlyWFMp48lCcx+xv7h9tzmJxfiAEK8+77+2489p3Po0dx79yCe4KBHr23ZwWBn320EC2ZupWMIi4ze2a+lKE3ymn3Fzz601Ppc3eR7/931zp6aSxtOYPeqRNTxFSenlKjbECMajKuckcvnAX/wIDAQAB",
+  "permissions": ["cookies", "tabs", "scripting", "storage"],
+  "host_permissions": ["https://webvpn.fudan.edu.cn/*", "https://icourse.fudan.edu.cn/*"],
+  "background": {"service_worker": "src/background.js", "type": "module"},
+  "action": {"default_popup": "popup/index.html"},
+  "externally_connectable": {"matches": ["https://johnxmj.github.io/*"]},
+  "web_accessible_resources": [{"resources": ["player/*"], "matches": ["https://johnxmj.github.io/*"]}]
+}

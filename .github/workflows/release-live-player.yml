@@ -1,0 +1,38 @@
+name: Release standalone live player
+on:
+  workflow_dispatch:
+  push:
+    tags: ['live-v*']
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: python -m unittest discover -s tests -v
+      - run: node --test tests/live_web/*.test.mjs tests/extension/*.test.mjs tests/pages_live/*.test.mjs
+      - run: node scripts/sync_live_web.mjs --check
+  package:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python scripts/build_windows.py --audit-only
+        name: Build Windows player
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node edge_extension/scripts/build.mjs
+        name: Package Edge extension
+      - shell: pwsh
+        run: Get-FileHash dist\fudan-icourse-live-edge.zip -Algorithm SHA256 | Out-File dist\SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*

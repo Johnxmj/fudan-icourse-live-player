@@ -1,0 +1,32 @@
+:root {
+  --ink: #0b1736;
+  --paper: #f4f0e7;
+  --live: #35d07f;
+  --warn: #f0b44d;
+  --muted: #9aa6bf;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: var(--paper); background: var(--ink); }
+.live-shell { min-height: 100dvh; display: grid; grid-template-columns: 280px minmax(0, 1fr); background: var(--ink); }
+.course-rail { padding: 28px 22px; border-right: 1px solid rgba(244,240,231,.14); }
+.course-rail h1 { margin: 0 0 8px; font-size: 1.15rem; }
+.course-rail p { color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.player-surface { position: relative; display: grid; place-items: center; padding: 32px; background: radial-gradient(circle at 80% 10%, #172958, var(--ink) 60%); }
+.state-card { width: min(580px, 100%); padding: 42px; border: 1px solid rgba(244,240,231,.16); border-radius: 20px; background: rgba(11,23,54,.74); box-shadow: 0 20px 70px rgba(0,0,0,.24); }
+.state-kicker { margin: 0 0 12px; color: var(--live); font-size: .73rem; letter-spacing: .16em; font-weight: 700; }
+.state-card h2 { margin: 0 0 10px; font-size: clamp(1.7rem, 3vw, 2.5rem); }
+.state-card > p:not(.state-kicker) { color: var(--muted); line-height: 1.6; }
+.state-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+button { border: 0; border-radius: 999px; padding: 12px 18px; font: inherit; font-weight: 650; color: var(--ink); background: var(--live); cursor: pointer; }
+button[data-action="local"] { background: var(--warn); }
+button:focus-visible { outline: 3px solid var(--paper); outline-offset: 3px; }
+.rail-toggle { display: none; }
+@media (max-width: 759px) {
+  .live-shell { grid-template-columns: 1fr; }
+  .course-rail { position: fixed; z-index: 2; inset: 0 20% 0 0; transform: translateX(-100%); transition: transform .2s ease; background: var(--ink); }
+  .course-rail[data-open="true"] { transform: translateX(0); }
+  .player-surface { min-height: 100dvh; padding: 20px; }
+  .state-card { padding: 28px; }
+  .rail-toggle { display: inline-flex; position: absolute; z-index: 3; top: 16px; left: 16px; }
+}
