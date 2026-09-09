@@ -98,23 +98,6 @@ class LiveApiTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.body), [])
 
-    def test_followed_catalog_keeps_offline_course_cards(self):
-        class Offline(Client):
-            def get_course_detail(self, course_id):
-                return {"title": "Course", "lectures": []}
-        self.app = LiveApplication(
-            SessionManager(Offline), course_ids=["c1"],
-            course_selections=[{"course_id": "c1", "title": "数学分析 III", "teacher": "严金海"}],
-        )
-        response = self.app.handle("GET", "/api/followed-courses", self.authorize(), b"")
-        self.assertEqual(response.status, 200)
-        payload = json.loads(response.body)
-        self.assertEqual(payload[0]["course_id"], "c1")
-        self.assertEqual(payload[0]["status"], "offline")
-        self.assertEqual(payload[0]["course_title"], "数学分析 III")
-        self.assertEqual(payload[0]["teacher"], "严金海")
-        self.assertEqual(payload[0]["available_views"], [])
-
     def test_upstream_errors_are_not_exposed(self):
         class Broken(Client):
             def get_course_detail(self, course_id):

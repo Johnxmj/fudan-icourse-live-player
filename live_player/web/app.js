@@ -374,15 +374,14 @@ export function mountLivePlayerApp(options = {}) {
   function renderCourseCard(course) {
     const selected = String(course.course_id) === state.selectedCourseId;
     const availability = Array.isArray(course.available_views) ? course.available_views.length : 0;
-    const status = course.status === "live" || !course.status ? "正在直播" : course.status === "unknown" ? "状态未知" : "暂无直播";
     return `
       <button type="button" class="course-card${selected ? " is-selected" : ""}" data-course-id="${escapeHtml(course.course_id)}">
         <span class="course-card__dot" aria-hidden="true"></span>
         <span class="course-card__copy">
           <strong>${escapeHtml(courseLabel(course))}</strong>
-          <span>${escapeHtml(courseMeta(course) || status)}</span>
+          <span>${escapeHtml(courseMeta(course) || "正在直播")}</span>
         </span>
-        <span class="course-card__views">${escapeHtml(course.status === "live" || !course.status ? `${availability} 个视角` : status)}</span>
+        <span class="course-card__views">${availability} 个视角</span>
       </button>
     `;
   }
@@ -403,7 +402,7 @@ export function mountLivePlayerApp(options = {}) {
 
   function renderCourseSummary() {
     if (els.courseCount) {
-      els.courseCount.textContent = `${state.courses.length} 门关注课程`;
+      els.courseCount.textContent = `${state.courses.length} 门直播`;
     }
     if (els.courseTitle) {
       els.courseTitle.textContent = state.activeCourse ? courseLabel(state.activeCourse) : "选择直播课程";
@@ -475,16 +474,6 @@ export function mountLivePlayerApp(options = {}) {
   function useCourseById(courseId) {
     const found = state.courses.find((course) => String(course.course_id) === String(courseId));
     if (!found) return;
-    if ((found.status && found.status !== "live") || !found.sub_id || !(found.available_views || []).length) {
-      clearPlayback();
-      state.activeCourse = null;
-      state.selectedCourseId = String(found.course_id);
-      state.selectedView = "";
-      state.manifestUrl = "";
-      setStatus(found.status === "unknown" ? "暂时无法确认直播状态，请稍后刷新课程。" : "当前暂无直播，开课后请刷新。", "muted");
-      renderAll();
-      return;
-    }
     setActiveCourse(found);
     loadSelectedCourse({ refreshCatalog: false }).catch((error) => {
       surfaceError(error);
@@ -608,12 +597,10 @@ export function mountLivePlayerApp(options = {}) {
     if (!preserveRecovery) state.recovery.refreshAttempts = 0;
     setStatus("正在刷新直播课程…", "muted");
     try {
-      const nextCourses = typeof transport.listFollowedCourses === "function"
-        ? await transport.listFollowedCourses()
-        : await transport.refreshLiveCourses();
+      const nextCourses = await transport.refreshLiveCourses();
       state.courses = Array.isArray(nextCourses) ? nextCourses : [];
       const nextSelected = state.courses.find((course) => String(course.course_id) === state.selectedCourseId);
-      if (nextSelected && (nextSelected.status === "live" || !nextSelected.status) && nextSelected.sub_id) {
+      if (nextSelected) {
         state.activeCourse = nextSelected;
         const availableViews = Array.isArray(nextSelected.available_views) ? nextSelected.available_views.map(String) : [];
         if (!availableViews.includes(state.selectedView)) {
@@ -624,16 +611,16 @@ export function mountLivePlayerApp(options = {}) {
           : "";
         renderAll();
         await loadSelectedCourse({ preserveRefreshBudget: true });
-      } else if (state.courses.some((course) => course.status === "live" || !course.status)) {
-        setActiveCourse(state.courses.find((course) => course.status === "live" || !course.status));
+      } else if (state.courses.length) {
+        setActiveCourse(state.courses[0]);
         await loadSelectedCourse({ preserveRefreshBudget: true });
       } else {
         clearPlayback();
         state.activeCourse = null;
-        state.selectedCourseId = state.courses[0]?.course_id ? String(state.courses[0].course_id) : "";
+        state.selectedCourseId = "";
         state.selectedView = "";
         state.manifestUrl = "";
-        setStatus("已加载关注课程，当前暂无直播，开课后请刷新。", "muted");
+        setStatus("当前没有直播课程，开课后请刷新。", "muted");
         renderAll();
       }
     } catch (error) {

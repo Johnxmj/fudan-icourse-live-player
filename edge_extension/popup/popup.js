@@ -1,4 +1,4 @@
-import { readCourseSelections, saveCourseIds } from '../src/course-settings.js';
+import { readCourseIds, saveCourseIds } from '../src/course-settings.js';
 import { createDirectoryPicker } from './directory.js';
 
 export function sortLiveCourses(courses = []) {
@@ -26,13 +26,11 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
       const item = document.createElement('li');
       const title = document.createElement('strong');
       title.textContent = course.course_title || '直播课程';
-      const statusLabel = course.status === 'live' || !course.status ? '正在直播' : course.status === 'unknown' ? '状态未知' : '暂无直播';
-      const details = document.createTextNode(`${statusLabel} · ${course.teacher || ''}${course.room ? ` · ${course.room}` : ''}`);
-      const startsAt = document.createTextNode(course.starts_at || (course.status === 'offline' ? '开课后刷新' : ''));
+      const details = document.createTextNode(`${course.teacher || ''} · ${course.room || ''}`);
+      const startsAt = document.createTextNode(course.starts_at || '');
       item.append(title, document.createElement('br'), details, document.createElement('br'), startsAt);
       const button = document.createElement('button');
-      button.textContent = course.status === 'live' || !course.status ? '打开直播' : '暂无直播';
-      button.disabled = course.status !== 'live' && Boolean(course.status);
+      button.textContent = '打开直播';
       button.addEventListener('click', async () => {
         try {
           const result = await chromeApi.runtime.sendMessage({ version: 1, type: 'OPEN_PLAYER', payload: { courseId: course.course_id, subId: course.sub_id, view: (course.available_views || ['teacher'])[0] } });
@@ -49,16 +47,15 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
     refreshButton.disabled = true;
     status.textContent = '正在检查课程…';
     try {
-      const result = await chromeApi.runtime.sendMessage({ version: 1, type: 'LIST_FOLLOWED', payload: {} });
+      const result = await chromeApi.runtime.sendMessage({ version: 1, type: 'LIST_LIVE', payload: {} });
       if (current !== generation) return;
       const state = result?.state;
       if (!result || result.error || result.ok === false || !['ready', 'empty', 'unconfigured', 'login-required'].includes(state)) throw new Error();
       renderCourses(state === 'ready' ? result.courses || [] : []);
       status.textContent = state === 'unconfigured' ? '请先添加要关注的课程并保存。'
         : state === 'login-required' ? '请点击“复旦官方登录”，完成后刷新课程。'
-          : result.courses?.some(course => course.status === 'live' || !course.status) ? `已关注 ${result.courses.length} 门课程，其中有当前直播。`
-            : result.courses?.length ? `已关注 ${result.courses.length} 门课程，目前暂无直播。`
-              : '已检查所配置课程，目前暂无直播。';
+          : result.courses?.length ? `找到 ${result.courses.length} 节当前直播。`
+            : '已检查所配置课程，目前暂无直播。';
     } catch (_) {
       if (current !== generation) return;
       renderCourses([]);
@@ -92,10 +89,9 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
     finally { loginButton.disabled = false; }
   });
 
-  const ready = readCourseSelections(storage).then(selections => {
-    const ids = selections.map(item => item.course_id);
+  const ready = readCourseIds(storage).then(ids => {
     input.value = ids.join('\n');
-    directory.setSavedCourses(selections);
+    directory.setSavedCourseIds(ids);
     return loadLive();
   }).catch(() => { status.textContent = '无法读取课程配置，请重新打开扩展。'; });
   return { ready, loadLive, directory };

@@ -37,22 +37,6 @@ test("Pages keeps courses, selects the isolated extension player and switches vi
   assert.deepEqual(views, ["student_audio"]);
 });
 
-test("Pages renders followed courses that are not currently live", async () => {
-  const screen = dom();
-  const followed = { course_id: "1002", sub_id: "", course_title: "线性代数", teacher: "老师", status: "offline", available_views: [] };
-  let followedCalls = 0;
-  const extension = {
-    name: "extension", probe: async () => true, getState: () => "ready",
-    listFollowed: async () => { followedCalls += 1; return [followed]; },
-    listLive: async () => { throw new Error("listLive should not be called"); },
-  };
-  const app = await boot({ ...screen, extensionFactory: () => extension, localFactory: null });
-  assert.equal(followedCalls, 1);
-  assert.match(screen.elements["live-courses"].innerHTML, /线性代数/);
-  assert.match(screen.elements["live-courses"].innerHTML, /暂无直播/);
-  assert.equal(app.activeCourse, null);
-});
-
 test("refresh stops ended courses and allows a course that starts later to be selected", async () => {
   const screen = dom();
   let courses = [course];

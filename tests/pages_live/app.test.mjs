@@ -101,7 +101,7 @@ test("boot wires the approved extension ID into the default adapter", async () =
   const runtime = {
     sendMessage(extensionId, message) {
       calls.push({ extensionId, message });
-      return Promise.resolve(["LIST_LIVE", "LIST_FOLLOWED"].includes(message.type)
+      return Promise.resolve(message.type === "LIST_LIVE"
         ? { version: 1, state: "ready", courses: [{ course_id: "c1", sub_id: "s1" }] }
         : { version: 1, capabilities: { live: true } });
     },
@@ -121,7 +121,7 @@ test("boot wires the approved extension ID into the default adapter", async () =
     message: { version: 1, type: "CAPABILITIES" },
   }, {
     extensionId: FUDAN_EXTENSION_ID,
-    message: { version: 1, type: "LIST_FOLLOWED" },
+    message: { version: 1, type: "LIST_LIVE" },
   }]);
   assert.match(state.markup, /data-state="connected"/);
 });

@@ -173,8 +173,7 @@ export async function boot({
     if (list) list.innerHTML = courses.map(course => {
       const selected = course.course_id === activeCourse?.course_id && course.sub_id === activeCourse?.sub_id;
       const meta = [course.teacher, course.room, [course.starts_at, course.ends_at].filter(Boolean).join(" — ")].filter(Boolean).join(" · ");
-      const status = course.status === "live" || !course.status ? "正在直播" : course.status === "unknown" ? "状态未知" : "暂无直播";
-      return `<button class="course-card" type="button" data-course-id="${escapeHtml(course.course_id)}" data-sub-id="${escapeHtml(course.sub_id)}" aria-pressed="${selected}"><strong>${escapeHtml(course.course_title || "直播课程")}</strong><span>${escapeHtml(course.sub_title || status)}</span><small>${escapeHtml(meta || status)}</small></button>`;
+      return `<button class="course-card" type="button" data-course-id="${escapeHtml(course.course_id)}" data-sub-id="${escapeHtml(course.sub_id)}" aria-pressed="${selected}"><strong>${escapeHtml(course.course_title || "直播课程")}</strong><span>${escapeHtml(course.sub_title || "")}</span><small>${escapeHtml(meta)}</small></button>`;
     }).join("") || '<p class="course-empty">暂无直播课程。请配置课程并刷新。</p>';
     const title = find("course-title");
     if (title) title.textContent = activeCourse?.course_title || "选择课程开始观看";
@@ -206,13 +205,6 @@ export async function boot({
   async function selectCourse(courseId, subId) {
     const course = courses.find(item => String(item.course_id) === String(courseId) && (subId === undefined || String(item.sub_id) === String(subId)));
     if (!course || disposed) return;
-    if ((course.status && course.status !== "live") || !course.sub_id || !viewsFor(course).length) {
-      activeCourse = null;
-      clearPlayer();
-      render();
-      show("connected", course.status === "unknown" ? "暂时无法确认直播状态，请稍后刷新课程。" : "当前暂无直播，开课后点击刷新课程。");
-      return;
-    }
     activeCourse = course;
     const views = viewsFor(course);
     selectedView = views.includes("teacher") ? "teacher" : views[0] || "";
@@ -242,17 +234,13 @@ export async function boot({
       let refreshedCourses;
       if (!initial && transport.refresh) {
         const refreshed = await transport.refresh();
-        if (typeof transport.listFollowed === "function") refreshedCourses = await transport.listFollowed();
-        else if (Array.isArray(refreshed?.courses)) refreshedCourses = refreshed.courses;
+        if (Array.isArray(refreshed?.courses)) refreshedCourses = refreshed.courses;
       }
       const helperState = transportState(transport);
       if (initial && ["login-required", "unconfigured", "failed"].includes(helperState)) {
         show(helperState); return;
       }
-      courses = refreshedCourses
-        ?? (typeof transport.listFollowed === "function"
-          ? await transport.listFollowed()
-          : (typeof transport.listLive === "function" ? await transport.listLive() : []));
+      courses = refreshedCourses ?? (typeof transport.listLive === "function" ? await transport.listLive() : []);
       if (!Array.isArray(courses)) courses = [];
       const nextState = transportState(transport);
       if (["login-required", "unconfigured", "failed", "disconnected"].includes(nextState)) {

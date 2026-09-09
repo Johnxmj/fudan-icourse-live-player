@@ -10,7 +10,7 @@
   const READY = "PAGE_BRIDGE_READY";
   const REQUEST = "PAGE_BRIDGE_REQUEST";
   const RESPONSE = "PAGE_BRIDGE_RESPONSE";
-  const ALLOWED_REQUESTS = new Set(["CAPABILITIES", "LIST_LIVE", "LIST_FOLLOWED", "REFRESH"]);
+  const ALLOWED_REQUESTS = new Set(["CAPABILITIES", "LIST_LIVE", "REFRESH"]);
   const SAFE_STATES = new Set(["unknown", "ready", "unconfigured", "login-required", "failed", "empty"]);
   const SAFE_VIEWS = new Set(["teacher", "student", "teacher_audio", "student_audio"]);
   const SAFE_NONCE = /^[A-Za-z0-9._:-]{1,256}$/;
@@ -77,7 +77,7 @@
       if (playerFrame) result.playerFrame = playerFrame;
       return result;
     }
-    if (requestType === "LIST_LIVE" || requestType === "LIST_FOLLOWED" || requestType === "REFRESH") {
+    if (requestType === "LIST_LIVE" || requestType === "REFRESH") {
       const courses = Array.isArray(response.courses) ? response.courses : [];
       result.courses = courses.map(safeCourse);
     }

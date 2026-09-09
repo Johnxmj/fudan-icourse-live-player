@@ -115,10 +115,7 @@ async function playerHarness({ blockAutoplay = false, embedded = false } = {}) {
   };
   context.window = context;
   context.parent = embedded ? { postMessage(message, origin) { posts.push({ message, origin }); } } : context;
-  // The production player is an ES module, while this lightweight harness
-  // evaluates it as a classic script. Strip the module-only import/export
-  // syntax before evaluation; the harness already supplies toWebVpnUrl.
-  vm.runInNewContext(js.replace(/^import[^\n]*\r?\n/m, '').replace(/export /g, ''), context);
+  vm.runInNewContext(js.replace(/^import .*;\n/m, '').replace(/export /g, ''), context);
   await new Promise(resolve => setImmediate(resolve));
   return { events, videoEvents, status, retry, sources, timers, posts, context,
     get requests() { return requests; }, get mediaRecoveries() { return mediaRecoveries; },
