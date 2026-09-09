@@ -6,10 +6,10 @@ const SAFE_NONCE = /^[A-Za-z0-9._:-]{1,256}$/;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const PAGE_ORIGIN = "https://johnxmj.github.io";
 const BRIDGE_SOURCE = "fudan-icourse-live-player";
-const BRIDGE_REQUEST_TYPES = new Set(["CAPABILITIES", "LIST_LIVE", "REFRESH"]);
+const BRIDGE_REQUEST_TYPES = new Set(["CAPABILITIES", "LIST_LIVE", "LIST_FOLLOWED", "REFRESH"]);
 // Catalog discovery can involve several sequential course requests over WebVPN.
 // Keep installation detection quick while bounding complete catalog operations.
-const BRIDGE_TIMEOUT_MS = Object.freeze({ CAPABILITIES: 5000, LIST_LIVE: 60000, REFRESH: 60000 });
+const BRIDGE_TIMEOUT_MS = Object.freeze({ CAPABILITIES: 5000, LIST_LIVE: 60000, LIST_FOLLOWED: 60000, REFRESH: 60000 });
 const COURSE_KEYS = [
   "course_id", "course_title", "teacher", "room", "sub_id", "sub_title",
   "starts_at", "ends_at", "status", "available_views",
@@ -178,6 +178,13 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
     },
     listLive: async () => {
       const result = await send("LIST_LIVE");
+      const courses = Array.isArray(result) ? result : (Array.isArray(result?.courses) ? result.courses : []);
+      currentState = responseState(result);
+      if (currentState === "connected" && courses.length === 0) currentState = "empty";
+      return courses.map(safeCourse);
+    },
+    listFollowed: async () => {
+      const result = await send("LIST_FOLLOWED");
       const courses = Array.isArray(result) ? result : (Array.isArray(result?.courses) ? result.courses : []);
       currentState = responseState(result);
       if (currentState === "connected" && courses.length === 0) currentState = "empty";

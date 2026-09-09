@@ -49,6 +49,18 @@ test("returns an empty catalog for NO_LIVE_COURSES", async () => {
   assert.deepEqual(courses, []);
 });
 
+test("loads the persistent followed catalog from the local helper", async () => {
+  const calls = [];
+  const transport = createLocalTransport("http://127.0.0.1:4310", "session", {
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return { ok: true, headers: { get: () => "application/json" }, json: async () => [{ course_id: "1001", status: "offline" }] };
+    },
+  });
+  assert.deepEqual(await transport.listFollowedCourses(), [{ course_id: "1001", status: "offline" }]);
+  assert.equal(calls[0], "http://127.0.0.1:4310/api/followed-courses");
+});
+
 test("threads an opaque media token into manifest URLs", () => {
   const transport = createLocalTransport("http://127.0.0.1:4310", "session-token", {
     fetchImpl: async () => {

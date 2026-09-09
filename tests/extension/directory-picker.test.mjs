@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createDirectoryPicker } from '../../edge_extension/popup/directory.js';
 
 function makeDocument() {
@@ -33,8 +34,19 @@ test('users can search by teacher, select results, and preserve existing followe
   checkbox.checked = true;
   checkbox.listeners.change();
   await picker.saveSelection();
-  assert.deepEqual(saved, { courseIds: ['old', 'new'] });
+  assert.deepEqual(saved, {
+    courseIds: ['old', 'new'],
+    courseSelections: [{ course_id: 'old' }, { course_id: 'new', course_title: '数学分析', teacher: '王老师' }],
+  });
   assert.deepEqual(onSavedIds, ['old', 'new']);
+});
+
+test('resident followed list exposes saved term and an unfollow action', async () => {
+  const script = readFileSync('edge_extension/popup/directory.js', 'utf8');
+  const html = readFileSync('edge_extension/popup/index.html', 'utf8');
+  assert.match(script, /保存学期/);
+  assert.match(script, /取消关注/);
+  assert.match(html, /directory-followed-term/);
 });
 
 test('login and network failures remain distinct and never show stale directory results', async () => {

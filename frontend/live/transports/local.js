@@ -85,6 +85,7 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
     name: "local", baseUrl, ready: connect,
     probe: async () => { try { await connect; return true; } catch { return false; } },
     listLive: async () => { const result = await json("/api/live-courses"); return Array.isArray(result) ? result : []; },
+    listFollowed: async () => { const result = await json("/api/followed-courses"); return Array.isArray(result) ? result : []; },
     listLiveCourses: async () => { const result = await json("/api/live-courses"); return Array.isArray(result) ? result : []; },
     refreshLiveCourses: async () => { const result = await json("/api/live-courses"); return Array.isArray(result) ? result : []; },
     requestJson: json,

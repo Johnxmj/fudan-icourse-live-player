@@ -242,10 +242,11 @@ class _StreamBody:
 
 
 class LiveApplication:
-    def __init__(self, session_manager, course_ids=(), term=None, *, media_handler=None):
+    def __init__(self, session_manager, course_ids=(), term=None, *, course_selections=(), media_handler=None):
         self.session_manager = session_manager
         self.course_ids = tuple(course_ids)
         self.term = term
+        self.course_selections = tuple(course_selections or ())
         self._media_routes = _MediaRouteStore()
         self._media_tokens = _MediaTokenStore()
         self.media_handler = media_handler or self._handle_media
@@ -300,6 +301,37 @@ class LiveApplication:
                     item = asdict(course)
                     item["media_token"] = self._media_token_for_course(course.course_id, course.sub_id)
                     payload.append(item)
+                return _json(200, payload)
+            if route == "/api/followed-courses" and method == "GET":
+                try:
+                    self.session_manager.get_client()
+                except Exception:
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+                try:
+                    live = self.session_manager.call(lambda client: discover_live_courses(
+                        client, resolve_course_ids(client, self.course_ids, self.term)))
+                except RuntimeError:
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+                live_by_id = {item.course_id: item for item in live}
+                saved_by_id = {
+                    str(item.get("course_id")): item for item in self.course_selections
+                    if isinstance(item, dict) and item.get("course_id") is not None
+                }
+                payload = []
+                for course_id in self.course_ids:
+                    item = live_by_id.get(str(course_id))
+                    if item is not None:
+                        value = asdict(item)
+                        value["media_token"] = self._media_token_for_course(item.course_id, item.sub_id)
+                        payload.append(value)
+                    else:
+                        saved = saved_by_id.get(str(course_id), {})
+                        payload.append({
+                            "course_id": str(course_id), "course_title": str(saved.get("title") or ""),
+                            "teacher": str(saved.get("teacher") or ""), "room": "",
+                            "sub_id": "", "sub_title": "", "starts_at": "", "ends_at": "",
+                            "status": "offline", "available_views": [],
+                        })
                 return _json(200, payload)
             return _error(404, "VIEW_UNAVAILABLE", "Requested view is unavailable")
         except Exception:

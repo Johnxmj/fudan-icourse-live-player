@@ -16,6 +16,7 @@ test('popup renders course metadata through text nodes', async () => {
   assert.doesNotMatch(script, /\.innerHTML\s*=/);
   assert.match(script, /textContent\s*=/);
   assert.match(script, /createTextNode/);
+  assert.match(script, /LIST_FOLLOWED/);
 });
 
 function makeDocument() {

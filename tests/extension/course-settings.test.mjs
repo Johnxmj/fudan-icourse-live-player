@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCourseIds, readCourseIds, saveCourseIds } from '../../edge_extension/src/course-settings.js';
+import { parseCourseIds, readCourseIds, saveCourseIds, readCourseSelections, saveCourseSelections, readSelectedTerm, saveSelectedTerm } from '../../edge_extension/src/course-settings.js';
 import * as settings from '../../edge_extension/src/course-settings.js';
 
 test('accepts IDs and official course links while storing only deduplicated identifiers', async () => {
@@ -36,4 +36,15 @@ test('directory selections preserve existing courses, deduplicate, and enforce t
   await assert.rejects(settings.saveCourseSelection([{ courseId: 'extra', selected: true }], storage), /200/);
   assert.equal(saved.courseIds.length, 200);
   await assert.rejects(settings.saveCourseSelection([{ selected: true }], storage), /选择/);
+});
+
+test('course metadata and selected semester survive storage round trips', async () => {
+  let saved = {};
+  const storage = { async get() { return saved; }, async set(value) { saved = { ...saved, ...value }; } };
+  const selections = await saveCourseSelections([{ course_id: '101', course_title: '数学分析', teacher: '张老师', term_id: '27', term_title: '2026-2027 学年第一学期' }], storage);
+  assert.equal(selections[0].course_title, '数学分析');
+  assert.deepEqual(await readCourseSelections(storage), selections);
+  assert.deepEqual(await readCourseIds(storage), ['101']);
+  await saveSelectedTerm({ id: '27', title: '2026-2027 学年第一学期' }, storage);
+  assert.deepEqual(await readSelectedTerm(storage), { id: '27', title: '2026-2027 学年第一学期' });
 });

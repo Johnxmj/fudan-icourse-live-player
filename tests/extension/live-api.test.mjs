@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapLiveCourse, listLiveCourses, resolveLiveSource } from "../../edge_extension/src/live-api.js";
+import { mapLiveCourse, listLiveCourses, listFollowedCourses, resolveLiveSource } from "../../edge_extension/src/live-api.js";
 const detail = { course_id:"1", title:"Analysis", teacher:"Dr. Example", lectures:[{sub_id:"2", date:"2999-01-01"}] };
 const info = { course_id:"1", sub_id:"2", course_title:"Analysis", lecturer_name:"Dr. Example", room_name:"R1", sub_title:"Lecture", start_at:"2999-01-01T09:00:00+08:00", end_at:"2999-01-01T10:00:00+08:00", sub_status:1, live_url:{output:{m3u8:"https://icourse.fudan.edu.cn/live.m3u8"}} };
 const DAY1 = new Date("2999-01-01T10:00:00+08:00");
@@ -15,6 +15,14 @@ const fakeFetcher = {
 test("ended lectures are not mapped as live", () => { assert.equal(mapLiveCourse({ title: "Analysis" }, { sub_status: 2, sub_id: "2", live_url: {} }), null); });
 test("maps only current live metadata", () => { assert.deepEqual(mapLiveCourse(detail, info), {course_id:"1",course_title:"Analysis",teacher:"Dr. Example",room:"R1",sub_id:"2",sub_title:"Lecture",starts_at:info.start_at,ends_at:info.end_at,status:"live",available_views:["teacher"]}); });
 test("lists current live courses", async () => { assert.equal((await listLiveCourses(fakeFetcher,["1"], DAY1)).length,1); });
+test("keeps followed courses and marks probe failures unknown", async () => {
+  const result = await listFollowedCourses({
+    async getCourseDetail(id) { if (id === "broken") throw new Error("temporary failure"); return detail; },
+    async getSubInfo() { return info; },
+  }, [{ course_id: "1", course_title: "Analysis" }, { course_id: "broken", course_title: "Other" }], DAY1);
+  assert.equal(result.find(course => course.course_id === "1").status, "live");
+  assert.equal(result.find(course => course.course_id === "broken").status, "unknown");
+});
 test("source resolution accepts only known views", async () => { await assert.rejects(() => resolveLiveSource(fakeFetcher, "1", "2", "recording"), /unknown live view/); });
 test("source resolution preserves ordinary https media urls", async () => {
   const fetcher = {
