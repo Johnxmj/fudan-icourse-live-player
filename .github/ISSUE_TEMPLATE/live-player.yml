@@ -1,0 +1,14 @@
+name: Live player issue
+description: Report a current-live player problem
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿提交密码、Cookie、签名直播地址、完整请求头或私人日志。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 请描述课程状态、使用的入口和界面错误。
+    validations:
+      required: true
