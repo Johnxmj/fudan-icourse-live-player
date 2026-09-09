@@ -5,6 +5,7 @@ import {
   probeSession,
   openCasLogin,
   createBackgroundHandlers,
+  parseCourseIds,
   handleExternalOpenPlayer,
   isLoginCompleteUrl,
   installLoginTabWatcher,
@@ -388,6 +389,22 @@ test('login completion recognizes direct iCourse and routed WebVPN URLs', () => 
   assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/login'), false);
 });
 
+test('course ID settings are normalized and deduplicated', () => {
+  assert.deepEqual(parseCourseIds('37142, 37234 37142\n38154'), ['37142', '37234', '38154']);
+  assert.deepEqual(parseCourseIds(['37142', 'bad-id!', '37142']), ['37142']);
+});
+
+test('handlers read configured course IDs from extension storage', async () => {
+  const calls = [];
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storageGet: async () => ({ courseIds: ['37142'] }),
+    listLive: async (_fetcher, ids) => { calls.push(ids); return []; },
+  });
+  await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} });
+  assert.deepEqual(calls, [['37142']]);
+});
+
 test('WebVPN home waits for a confirmed ready session before closing login tab', async () => {
   await openCasLogin({ tabsCreate: async () => ({ id: 74 }) });
   const listeners = [];
@@ -490,6 +507,34 @@ test('runtime listeners route versioned protocol requests through handlers', asy
   assert.deepEqual(responses, [{ state: 'ready' }]);
 });
 
+test('runtime listeners expose course ID settings to the popup', async () => {
+  const listeners = [];
+  let stored = [];
+  installRuntimeListeners({
+    runtime: {
+      id: 'extension-id',
+      onMessage: { addListener(listener) { listeners.push(listener); } },
+      onMessageExternal: { addListener() {} },
+    },
+    storage: {
+      local: {
+        get: async () => ({ courseIds: stored }),
+        set: async ({ courseIds }) => { stored = courseIds; },
+      },
+    },
+    tabs: {},
+  }, { handle: async () => ({ state: 'ready' }), source: async () => 'unused' });
+  const getResponses = [];
+  listeners.at(-1)({ type: 'GET_COURSE_IDS' }, { id: 'extension-id' }, (value) => getResponses.push(value));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(getResponses, [{ courseIds: [] }]);
+  const setResponses = [];
+  listeners.at(-1)({ type: 'SET_COURSE_IDS', courseIds: '37142,37234,37142' }, { id: 'extension-id' }, (value) => setResponses.push(value));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(setResponses, [{ ok: true, courseIds: ['37142', '37234'] }]);
+  assert.deepEqual(stored, ['37142', '37234']);
+});
+
 test('popup exposes a user-triggered CAS login action', async () => {
   const { readFileSync } = await import('node:fs');
   const html = readFileSync('edge_extension/popup/index.html', 'utf8');
@@ -498,4 +543,6 @@ test('popup exposes a user-triggered CAS login action', async () => {
   assert.match(html, /popup\.js/);
   assert.match(script, /OPEN_CAS_LOGIN/);
   assert.match(script, /addEventListener\(["']click["']/);
+  assert.match(html, /id=["']course-ids["']/);
+  assert.match(script, /SET_COURSE_IDS/);
 });

@@ -3,6 +3,9 @@
   <head><link rel="stylesheet" href="popup.css"></head>
   <body>
     <h1>Fudan iCourse Live</h1>
+    <label for="course-ids">Course IDs (comma or space separated)</label>
+    <input id="course-ids" type="text" autocomplete="off" placeholder="37142, 37234">
+    <button id="save-course-ids" type="button">Save course IDs</button>
     <ul id="courses" aria-live="polite"></ul>
     <button id="login" type="button">Log in with Fudan CAS</button>
     <p id="status" role="status" aria-live="polite"></p>
