@@ -19,6 +19,7 @@ export const PLAYER_SOURCE = 'PLAYER_SOURCE';
 export const OPEN_CAS_LOGIN = 'OPEN_CAS_LOGIN';
 
 let loginTabId = null;
+let loginTabSawPrompt = false;
 
 /** Handle the small, public API exposed to the approved Pages origin. */
 export async function handleExternal(message, sender = {}, deps = {}) {
@@ -138,6 +139,7 @@ export async function openCasLogin({ tabsCreate } = {}) {
   if (typeof create !== 'function') throw new Error('tabs unavailable');
   const tab = await create({ url: CAS_URL });
   loginTabId = tab?.id ?? null;
+  loginTabSawPrompt = false;
   return tab;
 }
 
@@ -304,6 +306,10 @@ export function installLoginTabWatcher(
   updated.addListener((tabId, changeInfo = {}, tab = {}) => {
     if (tabId !== loginTabId) return;
     const destination = changeInfo.url || tab.url;
+    if (isWebVpnLoginUrl(destination)) {
+      loginTabSawPrompt = true;
+      return;
+    }
     if (!isLoginCompleteUrl(destination)) return;
 
     const isWebVpnHome = (() => {
@@ -314,6 +320,7 @@ export function installLoginTabWatcher(
         return false;
       }
     })();
+    if (isWebVpnHome && !loginTabSawPrompt) return;
     const refresh = onRefresh || (
       typeof handlers.refresh === 'function'
         ? () => handlers.refresh()
@@ -331,6 +338,15 @@ export function installLoginTabWatcher(
       })
       .catch(() => {});
   });
+}
+
+function isWebVpnLoginUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.hostname === 'webvpn.fudan.edu.cn' && url.pathname === '/login';
+  } catch (_) {
+    return false;
+  }
 }
 
 export function installRuntimeListeners(

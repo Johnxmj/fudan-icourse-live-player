@@ -400,6 +400,7 @@ test('WebVPN home waits for a confirmed ready session before closing login tab',
     },
   }, { refresh: async () => ({ state }) });
 
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/login' });
   listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(removed, []);
@@ -408,6 +409,22 @@ test('WebVPN home waits for a confirmed ready session before closing login tab',
   listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(removed, [74]);
+});
+
+test('initial WebVPN home does not close the login tab before the auth page', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 75 }) });
+  const listeners = [];
+  const removed = [];
+  installLoginTabWatcher({
+    tabs: {
+      onUpdated: { addListener(listener) { listeners.push(listener); } },
+      remove: async (tabId) => removed.push(tabId),
+    },
+  }, { refresh: async () => ({ state: 'ready' }) });
+
+  listeners[0](75, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, []);
 });
 
 test('CAS completion closes only the created tab and refreshes handlers', async () => {
