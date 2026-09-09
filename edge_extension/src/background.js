@@ -170,7 +170,10 @@ export async function probeSession(deps = {}) {
       return { state: 'login-required' };
     }
     const code = result?.body?.code;
-    if (result?.httpStatus === 200 && [0, 200, '0', '200'].includes(code)) {
+    const hasAuthenticatedPayload = result?.body && typeof result.body === 'object'
+      && (Object.prototype.hasOwnProperty.call(result.body, 'data')
+        || Object.prototype.hasOwnProperty.call(result.body, 'params'));
+    if (result?.httpStatus === 200 && ([0, 200, '0', '200'].includes(code) || hasAuthenticatedPayload)) {
       return { state: 'ready' };
     }
     return { state: 'failed' };
