@@ -49,6 +49,13 @@ test('probeSession checks the canonical iCourse infosimple endpoint by default',
   assert.doesNotMatch(requests[0], /courseapi\/v3\/user\/info/);
 });
 
+test('probeSession accepts an authenticated infosimple payload without a top-level code', async () => {
+  assert.deepEqual(
+    await probeSession({ fetchJson: async () => ({ httpStatus: 200, body: { data: { id: 'student' } } }) }),
+    { state: 'ready' },
+  );
+});
+
 test('LIST_LIVE uses the canonical multi-search course-detail endpoint', async () => {
   const previousFetch = globalThis.fetch;
   const requests = [];
@@ -664,6 +671,15 @@ test('directory login failure skips all catalog requests and remains actionable'
   } });
   assert.equal(typeof handlers.directory, 'function');
   assert.deepEqual(await handlers.directory({ type: 'SEARCH_COURSES', term: 'term1', query: '' }), { state: 'login-required' });
+});
+
+test('directory endpoint can confirm a session when the lightweight probe is inconclusive', async () => {
+  const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'failed' }), fetcher: {
+    async getDirectoryTerms() { return { terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1' }; },
+  } });
+  assert.deepEqual(await handlers.directory({ type: 'GET_DIRECTORY_TERMS' }), {
+    state: 'ready', terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1',
+  });
 });
 
 test('directory search uses the official paginated portal endpoint with the selected term', async () => {
