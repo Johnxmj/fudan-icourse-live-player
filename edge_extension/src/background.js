@@ -287,7 +287,7 @@ export function isLoginCompleteUrl(value) {
     const webVpnRoute = new URL(WEBVPN_PREFIX).pathname.replace(/\/+$/, '');
     return (
       url.hostname === 'webvpn.fudan.edu.cn'
-      && (url.pathname === webVpnRoute || url.pathname.startsWith(`${webVpnRoute}/`))
+      && (url.pathname === '/' || url.pathname === webVpnRoute || url.pathname.startsWith(`${webVpnRoute}/`))
     );
   } catch (_) {
     return false;
@@ -306,17 +306,30 @@ export function installLoginTabWatcher(
     const destination = changeInfo.url || tab.url;
     if (!isLoginCompleteUrl(destination)) return;
 
-    const completedTabId = loginTabId;
-    loginTabId = null;
-    Promise.resolve()
-      .then(() => chromeApi.tabs.remove?.(completedTabId))
-      .catch(() => {});
+    const isWebVpnHome = (() => {
+      try {
+        const url = new URL(destination);
+        return url.hostname === 'webvpn.fudan.edu.cn' && url.pathname === '/';
+      } catch (_) {
+        return false;
+      }
+    })();
     const refresh = onRefresh || (
       typeof handlers.refresh === 'function'
         ? () => handlers.refresh()
         : () => handlers.handle({ version: PROTOCOL_VERSION, type: REFRESH, payload: {} })
     );
-    Promise.resolve().then(refresh).catch(() => {});
+    Promise.resolve()
+      .then(refresh)
+      .then((result) => {
+        // The WebVPN home is also the pre-login redirect target. Only close it
+        // after the authenticated API check confirms a ready session.
+        if (isWebVpnHome && result?.state !== 'ready') return;
+        const completedTabId = loginTabId;
+        loginTabId = null;
+        return chromeApi.tabs.remove?.(completedTabId);
+      })
+      .catch(() => {});
   });
 }
 
