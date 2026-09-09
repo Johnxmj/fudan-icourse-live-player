@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Fudan iCourse 当前直播">
+  <title>当前直播 · Fudan iCourse</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <main class="live-shell">
+    <button class="rail-toggle" data-rail-toggle type="button" aria-controls="live-course-rail" aria-expanded="false">查看直播课程</button>
+    <aside class="course-rail" id="live-course-rail" data-course-rail data-open="false" aria-label="直播课程">
+      <h1>当前直播</h1>
+      <p>只显示正在进行的课程。播放由你明确启动的本地助手提供。</p>
+      <div data-live-courses></div>
+    </aside>
+    <section class="player-surface" aria-label="播放器">
+      <div data-live-state aria-live="polite"></div>
+    </section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
