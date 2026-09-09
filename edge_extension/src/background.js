@@ -1,4 +1,5 @@
 import { listLiveCourses, resolveLiveSource } from './live-api.js';
+import { readCourseIds } from './course-settings.js';
 import {
   parseRequest,
   safeCourse,
@@ -86,13 +87,21 @@ async function apiGet(path, params) {
   };
 }
 
+function assertApiSuccess(result) {
+  const code = result?.body?.code;
+  if ([302, 401, 403].includes(result?.httpStatus) || [401, 403, '401', '403'].includes(code) || locationRequiresLogin(result?.location)) {
+    throw Object.assign(new Error('login required'), { state: 'login-required' });
+  }
+  if (result?.httpStatus !== 200 || (code != null && ![0, 200, '0', '200'].includes(code))) throw new Error('request failed');
+}
+
 const defaultFetcher = {
   async getSubInfo(courseId, subId) {
     const result = await apiGet(
       'courseapi/v3/portal-home-setting/get-sub-info',
       { course_id: courseId, sub_id: subId },
     );
-    if (result.httpStatus !== 200) throw new Error('request failed');
+    assertApiSuccess(result);
     return result.body.data || {};
   },
   async getCourseDetail(courseId) {
@@ -100,7 +109,7 @@ const defaultFetcher = {
       'courseapi/v3/multi-search/get-course-detail',
       { course_id: courseId },
     );
-    if (result.httpStatus !== 200) throw new Error('request failed');
+    assertApiSuccess(result);
     return result.body.data || result.body;
   },
 };
@@ -119,6 +128,7 @@ export async function probeSession(deps = {}) {
       result?.httpStatus === 302
       || result?.httpStatus === 401
       || result?.httpStatus === 403
+      || [401, 403, '401', '403'].includes(result?.body?.code)
       || locationRequiresLogin(result?.location)
     ) {
       return { state: 'login-required' };
@@ -144,13 +154,26 @@ export async function openCasLogin({ tabsCreate } = {}) {
 export function createBackgroundHandlers(deps = {}) {
   const fetcher = deps.fetcher || defaultFetcher;
   const probe = deps.probe || (() => probeSession(deps));
-  const getCourseIds = deps.getCourseIds || (async () => []);
+  const getCourseIds = deps.getCourseIds || (() => readCourseIds(deps.storage));
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
 
   async function refreshSession() {
     currentSession = await probe();
     return currentSession;
+  }
+
+  async function listConfiguredCourses() {
+    const ids = await getCourseIds();
+    if (!ids.length) return { state: 'unconfigured', courses: [] };
+    await refreshSession();
+    if (currentSession.state !== 'ready') return { state: currentSession.state, courses: [] };
+    try {
+      const courses = await (deps.listLive || listLiveCourses)(fetcher, ids);
+      return { state: 'ready', courses: courses.map(safeCourse) };
+    } catch (error) {
+      return { state: error?.state === 'login-required' ? 'login-required' : 'failed', courses: [] };
+    }
   }
 
   return {
@@ -169,18 +192,10 @@ export function createBackgroundHandlers(deps = {}) {
         };
       }
       if (request.type === REFRESH) {
-        await refreshSession();
-        return { state: currentSession.state };
+        return listConfiguredCourses();
       }
       if (request.type === LIST_LIVE) {
-        await refreshSession();
-        if (currentSession.state !== 'ready') {
-          return { state: currentSession.state, courses: [] };
-        }
-        const courses = await (
-          deps.listLive || listLiveCourses
-        )(fetcher, await getCourseIds());
-        return { state: 'ready', courses: courses.map(safeCourse) };
+        return listConfiguredCourses();
       }
       if (request.type === SET_VIEW) {
         selectedView = request.payload.view;
@@ -207,12 +222,7 @@ export function createBackgroundHandlers(deps = {}) {
     },
 
     async refresh() {
-      await refreshSession();
-      if (currentSession.state !== 'ready') return currentSession;
-      const courses = await (
-        deps.listLive || listLiveCourses
-      )(fetcher, await getCourseIds());
-      return { state: 'ready', courses: courses.map(safeCourse) };
+      return listConfiguredCourses();
     },
   };
 }
@@ -362,7 +372,7 @@ export function installRuntimeListeners(
       }
       handlers.source(payload.courseId, payload.subId, payload.view)
         .then((source) => sendResponse({ ok: true, source }))
-        .catch(() => sendResponse({ ok: false, error: 'live source unavailable' }));
+        .catch((error) => sendResponse({ ok: false, error: 'live source unavailable', state: ['login-required', 'ended'].includes(error?.state) ? error.state : 'failed' }));
       return true;
     }
 

@@ -11,7 +11,7 @@
   const REQUEST = "PAGE_BRIDGE_REQUEST";
   const RESPONSE = "PAGE_BRIDGE_RESPONSE";
   const ALLOWED_REQUESTS = new Set(["CAPABILITIES", "LIST_LIVE", "REFRESH"]);
-  const SAFE_STATES = new Set(["unknown", "ready", "login-required", "failed", "empty"]);
+  const SAFE_STATES = new Set(["unknown", "ready", "unconfigured", "login-required", "failed", "empty"]);
   const SAFE_VIEWS = new Set(["teacher", "student", "teacher_audio", "student_audio"]);
   const SAFE_NONCE = /^[A-Za-z0-9._:-]{1,256}$/;
   const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;

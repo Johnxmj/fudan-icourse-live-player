@@ -47,20 +47,22 @@ class LauncherTest(unittest.TestCase):
             build_application({})
 
     def test_open_edge_prefers_installed_edge_before_browser_fallback(self):
-        with patch.dict(os.environ, {"ProgramFiles(x86)": r"C:\PFx86", "ProgramFiles": r"C:\PF"}, clear=False), \
+        with patch("live_player.cli.sys.platform", "win32"), \
+             patch.dict(os.environ, {"ProgramFiles(x86)": r"C:\PFx86", "ProgramFiles": r"C:\PF"}, clear=False), \
              patch("live_player.cli.Path.is_file", side_effect=[True]), \
              patch("live_player.cli.subprocess.Popen") as popen, \
              patch("live_player.cli.webbrowser.open") as browser_open:
             open_edge("http://127.0.0.1:1/?bootstrap=token")
 
         popen.assert_called_once_with([
-            r"C:\PFx86\Microsoft\Edge\Application\msedge.exe",
+            str(__import__("pathlib").Path(r"C:\PFx86") / "Microsoft/Edge/Application/msedge.exe"),
             "http://127.0.0.1:1/?bootstrap=token",
         ])
         browser_open.assert_not_called()
 
     def test_open_edge_falls_back_when_edge_is_missing(self):
-        with patch.dict(os.environ, {"ProgramFiles(x86)": r"C:\PFx86", "ProgramFiles": r"C:\PF"}, clear=False), \
+        with patch("live_player.cli.sys.platform", "win32"), \
+             patch.dict(os.environ, {"ProgramFiles(x86)": r"C:\PFx86", "ProgramFiles": r"C:\PF"}, clear=False), \
              patch("live_player.cli.Path.is_file", return_value=False), \
              patch("live_player.cli.subprocess.Popen") as popen, \
              patch("live_player.cli.webbrowser.open") as browser_open:
@@ -85,7 +87,7 @@ class LauncherTest(unittest.TestCase):
             launch_player(config)
 
         serve_fn.assert_called_once_with(app, host="127.0.0.1", port=0)
-        browser_open.assert_called_once_with("http://127.0.0.1:53123/?bootstrap=bootstrap-token")
+        browser_open.assert_called_once_with("http://127.0.0.1:53123/#bootstrap=bootstrap-token")
         self.assertEqual(server.shutdown_calls, 1)
         self.assertEqual(server.server_close_calls, 1)
         self.assertEqual(app.shutdown_calls, 1)

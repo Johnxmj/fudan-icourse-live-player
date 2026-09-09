@@ -459,3 +459,51 @@ test('popup exposes a user-triggered CAS login action', async () => {
   assert.match(script, /OPEN_CAS_LOGIN/);
   assert.match(script, /addEventListener\(["']click["']/);
 });
+
+test('production handlers read saved courses and refresh changes without a restart', async () => {
+  let ids = ['course1'];
+  const visited = [];
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storage: { async get() { return { courseIds: ids }; } },
+    listLive: async (_fetcher, configured) => { visited.push([...configured]); return []; },
+  });
+  await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} });
+  ids = ['course2'];
+  await handlers.refresh();
+  assert.deepEqual(visited, [['course1'], ['course2']]);
+});
+
+test('missing course configuration differs from a configured course with no live lecture', async () => {
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storage: { async get() { return {}; } },
+  });
+  assert.deepEqual(await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} }), { state: 'unconfigured', courses: [] });
+  assert.equal((await handlers.refresh()).state, 'unconfigured');
+  assert.equal((await handlers.handle({ version: 1, type: 'REFRESH', payload: {} })).state, 'unconfigured');
+});
+
+test('an expired session during a course API call remains login-required', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async input => ({ status: 200, url: String(input), json: async () => ({ code: 401, msg: 'private upstream detail' }) });
+  try {
+    const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'ready' }), getCourseIds: async () => ['123'] });
+    assert.deepEqual(await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} }), { state: 'login-required', courses: [] });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('an expired session returned as JSON is recognized before catalog lookup', async () => {
+  assert.deepEqual(await probeSession({ fetchJson: async () => ({ httpStatus: 200, body: { code: 401 } }) }), { state: 'login-required' });
+});
+
+test('player source failures return only a safe actionable state', async () => {
+  const listeners = [];
+  installRuntimeListeners({ runtime: { id: 'extension-id', onMessage: { addListener(fn) { listeners.push(fn); } } }, tabs: {} }, {
+    source: async () => { throw Object.assign(new Error('https://private.invalid/secret'), { state: 'login-required' }); },
+  });
+  let result;
+  listeners[0]({ type: 'PLAYER_SOURCE', payload: { courseId: 'c1', subId: 's1', view: 'teacher' } }, { id: 'extension-id' }, value => { result = value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(result, { ok: false, error: 'live source unavailable', state: 'login-required' });
+});

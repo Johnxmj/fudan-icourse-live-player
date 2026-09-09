@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Fudan iCourse 当前直播">
+  <meta name="description" content="选择复旦 iCourse 当前直播课程，切换教师、学生画面或纯音频。">
   <title>当前直播 · Fudan iCourse</title>
   <link rel="stylesheet" href="./app.css">
 </head>
@@ -11,14 +11,24 @@
   <main class="live-shell">
     <button class="rail-toggle" data-rail-toggle type="button" aria-controls="live-course-rail" aria-expanded="false">查看直播课程</button>
     <aside class="course-rail" id="live-course-rail" data-course-rail data-open="false" aria-label="直播课程">
+      <p class="brand-label">FUDAN iCOURSE</p>
       <h1>当前直播</h1>
-      <p>只显示正在进行的课程。播放由你明确启动的本地助手提供。</p>
-      <div data-live-courses></div>
+      <p>登录学校平台、配置课程后，即可在这里选择直播。</p>
+      <button data-refresh type="button">刷新课程</button>
+      <div class="course-list" data-live-courses></div>
+      <a class="help-link" href="https://github.com/Johnxmj/fudan-icourse-live-player/blob/main/docs/live-player.md" target="_blank" rel="noopener noreferrer">安装与使用说明 ↗</a>
     </aside>
-    <section class="player-surface" aria-label="播放器">
+    <section class="player-surface" data-stage aria-label="播放器">
+      <header class="player-heading">
+        <div><h2 data-course-title>选择课程开始观看</h2><p data-course-meta></p></div>
+        <button data-fullscreen type="button">全屏</button>
+      </header>
       <div data-live-state aria-live="polite"></div>
+      <div class="player-host" data-player hidden></div>
+      <div class="view-bar" data-view-bar aria-label="画面与音频"></div>
     </section>
   </main>
+  <script src="./vendor/hls.min.js"></script>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -76,6 +76,66 @@ class LiveCatalogTest(unittest.TestCase):
         self.assertEqual(len(discover_live_courses(client, ["38463"], now=NOW)), 1)
         self.assertEqual(client.sub_info_calls, [("38463", "655212")])
 
+    def test_future_same_day_session_does_not_hide_morning_live_session(self):
+        detail = {**COURSE_DETAIL, "lectures": [
+            {"sub_id": "655212", "date": "2999-01-02", "start_at": "2999-01-02T09:00:00+08:00"},
+            {"sub_id": "future", "date": "2999-01-02", "start_at": "2999-01-02T15:00:00+08:00"},
+        ]}
+        client = FakeClient({"655212": LIVE_INFO, "future": ENDED_INFO}, details={"38463": detail})
+        self.assertEqual([c.sub_id for c in discover_live_courses(client, ["38463"], now=NOW)], ["655212"])
+        self.assertEqual(client.sub_info_calls, [("38463", "655212")])
+
+    def test_time_only_start_is_interpreted_on_the_lecture_date(self):
+        detail = {**COURSE_DETAIL, "lectures": [
+            {"sub_id": "655212", "date": "2999-01-02", "begin_time": "09:00", "end_time": "11:00"},
+            {"sub_id": "future", "date": "2999-01-02", "start_at": "15:00"},
+        ]}
+        info = {key: value for key, value in LIVE_INFO.items() if key not in ("start_at", "end_at")}
+        client = FakeClient({"655212": info, "future": ENDED_INFO}, details={"38463": detail})
+        courses = discover_live_courses(client, ["38463"], now=NOW)
+        self.assertEqual(client.sub_info_calls, [("38463", "655212")])
+        self.assertEqual(courses[0].starts_at, "2999-01-02T09:00:00+08:00")
+        self.assertEqual(courses[0].ends_at, "2999-01-02T11:00:00+08:00")
+
+    def test_checks_other_same_day_candidates_without_probing_history(self):
+        detail = {**COURSE_DETAIL, "lectures": [
+            {"sub_id": "old", "date": "2999-01-01"},
+            {"sub_id": "655212", "date": "2999-01-02"},
+            {"sub_id": "ended", "date": "2999-01-02"},
+        ]}
+        client = FakeClient({"655212": LIVE_INFO, "ended": ENDED_INFO}, details={"38463": detail})
+        self.assertEqual([c.sub_id for c in discover_live_courses(client, ["38463"], now=NOW)], ["655212"])
+        self.assertEqual(client.sub_info_calls, [("38463", "ended"), ("38463", "655212")])
+
+    def test_future_date_is_not_eligible_merely_because_end_is_in_future(self):
+        detail = {"lectures": [{"sub_id": "future", "date": "2999-01-03", "end_at": "2999-01-03T11:00:00+08:00"}]}
+        client = FakeClient({"future": LIVE_INFO}, details={"38463": detail})
+        self.assertEqual(discover_live_courses(client, ["38463"], now=NOW), [])
+        self.assertEqual(client.sub_info_calls, [])
+
+    def test_one_broken_course_does_not_hide_another_live_course(self):
+        client = FakeClient({"655212": LIVE_INFO})
+        self.assertEqual([c.sub_id for c in discover_live_courses(client, ["missing", "38463"], now=NOW)], ["655212"])
+
+    def test_one_failed_candidate_does_not_hide_another_current_candidate(self):
+        detail = {**COURSE_DETAIL, "lectures": [
+            {"sub_id": "655212", "date": "2999-01-02"},
+            {"sub_id": "missing", "date": "2999-01-02"},
+        ]}
+        client = FakeClient({"655212": LIVE_INFO}, details={"38463": detail})
+        self.assertEqual([c.sub_id for c in discover_live_courses(client, ["38463"], now=NOW)], ["655212"])
+
+    def test_live_metadata_preserves_candidate_times_when_info_omits_them(self):
+        detail = {**COURSE_DETAIL, "lectures": [{
+            "sub_id": "655212", "date": "2999-01-02",
+            "start_at": "2999-01-02T09:00:00+08:00", "end_at": "2999-01-02T11:00:00+08:00",
+        }]}
+        info = {key: value for key, value in LIVE_INFO.items() if key not in ("start_at", "end_at")}
+        client = FakeClient({"655212": info}, details={"38463": detail})
+        course = discover_live_courses(client, ["38463"], now=NOW)[0]
+        self.assertEqual(course.starts_at, detail["lectures"][0]["start_at"])
+        self.assertEqual(course.ends_at, detail["lectures"][0]["end_at"])
+
     def test_cross_midnight_session_with_unelapsed_end_is_candidate(self):
         detail = {**COURSE_DETAIL, "lectures": [{
             "sub_id": "655212", "date": "2999-01-01",

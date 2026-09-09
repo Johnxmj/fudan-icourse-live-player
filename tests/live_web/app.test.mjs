@@ -376,7 +376,7 @@ test("uses native HLS playback when Hls.js is unavailable", async () => {
     );
 
     assert.equal(FakeHls.instances.length, 0);
-    assert.equal(api.state.statusText, "Playing Course using the browser's native HLS support.");
+    assert.equal(api.state.statusText, "已准备好播放 Course，如未开始请点击播放按钮。");
     assert.equal(elements.video.src, "http://127.0.0.1:4310/media/1001/s1/teacher/manifest.m3u8?media_token=media-token");
   } finally {
     FakeHls.isSupported = originalIsSupported;
@@ -499,7 +499,7 @@ test("falls back to manual sign-in when bootstrap redemption fails", async () =>
   });
 
   await waitFor(
-    () => api.state.statusTone === "danger" && api.state.statusText.includes("Automatic sign-in failed"),
+    () => api.state.statusTone === "danger" && api.state.statusText.includes("自动连接失败"),
     "expected the app to surface a manual-sign-in error when bootstrap redemption is rejected",
   );
 
@@ -509,8 +509,8 @@ test("falls back to manual sign-in when bootstrap redemption fails", async () =>
   assert.equal(api.state.token, "");
   assert.equal(win.location.search, "");
   assert.equal(win.location.historyCalls.length, 1);
-  assert.ok(elements.status.textContent.includes("Automatic sign-in failed"));
-  assert.ok(elements.status.textContent.includes("bootstrap rejected"));
+  assert.ok(elements.status.textContent.includes("自动连接失败"));
+  assert.ok(!elements.status.textContent.includes("bootstrap rejected"));
 });
 
 test("picks the loopback origin for bootstrap redemption instead of persisted base URLs", async () => {
@@ -571,13 +571,13 @@ test("clears stale stored token after bootstrap redemption fails", async () => {
   });
 
   await waitFor(
-    () => api.state.statusTone === "danger" && api.state.statusText.includes("Automatic sign-in failed"),
+    () => api.state.statusTone === "danger" && api.state.statusText.includes("自动连接失败"),
     "expected the app to surface a manual-sign-in error when bootstrap redemption is rejected",
   );
 
   assert.equal(elements.tokenInput.value, "");
   assert.equal(api.state.token, "");
-  assert.equal(elements.connectionHint.textContent, "Paste a session token to connect.");
+  assert.equal(elements.connectionHint.textContent, "请通过本地播放器启动入口打开此页面，即可自动连接。");
   assert.ok(!storage.reads.includes("live-player.token"));
   assert.ok(!storage.writes.some(([key]) => key === "live-player.token"));
 });
@@ -602,14 +602,14 @@ test("keeps the redeemed session token when the live catalog fails after bootstr
   });
 
   await waitFor(
-    () => api.state.statusTone === "danger" && api.state.statusText.includes("catalog unavailable"),
+    () => api.state.statusTone === "danger" && api.state.statusText.includes("暂时无法获取直播"),
     "expected the app to surface the catalog failure after bootstrap succeeds",
   );
 
   assert.equal(transport.calls.length, 2);
   assert.equal(api.state.token, "session-token");
   assert.equal(elements.tokenInput.value, "session-token");
-  assert.equal(elements.connectionHint.textContent, "Connected to the local player API.");
+  assert.equal(elements.connectionHint.textContent, "已连接本地播放器。");
 });
 
 test("clears stale playback when the live catalog becomes empty", async () => {
@@ -667,4 +667,64 @@ test("leaves the desktop rail visible to screen readers", async () => {
   });
 
   assert.equal(elements.rail.getAttribute("aria-hidden"), null);
+});
+
+test("redeems fragment bootstrap and removes it before the first request", async () => {
+  const { doc, win } = createLivePlayerDom();
+  const location = new URL("http://127.0.0.1:4310/#bootstrap=fragment-secret");
+  win.location = location;
+  win.history = { replaceState(_state, _title, next) { location.href = new URL(next, location).href; } };
+  const calls = [];
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  const api = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      assert.equal(location.hash, "");
+      return createJsonResponse(200, url.endsWith("/api/session") ? { token: "session-token" } : []);
+    },
+  });
+  await waitFor(() => calls.length === 2, "fragment pairing should load the catalog");
+  assert.equal(api.state.token, "session-token");
+});
+
+test("media authorization failure refreshes the short-lived media token without logging out", async () => {
+  FakeHls.instances = [];
+  const course = { course_id: "1001", sub_id: "s1", course_title: "课", media_token: "old-media", available_views: ["teacher"] };
+  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, [{ ...course, media_token: "fresh-media" }])]);
+  const { doc, win } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  const api = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+  await waitFor(() => FakeHls.instances.length === 1, "initial playback");
+  await FakeHls.instances[0].emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
+  assert.equal(requests.calls.length, 2);
+  assert.equal(api.state.recovery.sessionExpired, false);
+  assert.match(FakeHls.instances.at(-1).sources[0], /fresh-media/);
+  await FakeHls.instances.at(-1).emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
+  assert.equal(requests.calls.length, 2, "auth recovery must be bounded");
+});
+
+test("catalog authorization failure clears stale playback and requires reconnecting", async () => {
+  FakeHls.instances = [];
+  const course = { course_id: "1001", sub_id: "s1", media_token: "media", available_views: ["teacher"] };
+  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(401, { error: { code: "LOGIN_REQUIRED" } })]);
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  const api = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+  await waitFor(() => FakeHls.instances.length === 1, "initial playback");
+  elements.video.src = "blob:old";
+  await api.refresh();
+  assert.equal(api.state.recovery.sessionExpired, true);
+  assert.equal(elements.video.src, "");
+});
+
+test("Chinese view labels preserve playable view identifiers", async () => {
+  FakeHls.instances = [];
+  const { doc, win, elements } = createLivePlayerDom();
+  const course = { course_id: "1001", sub_id: "s1", media_token: "media", available_views: ["teacher", "student_audio"] };
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, token: "session", fetchImpl: async () => createJsonResponse(200, [course]) });
+  await waitFor(() => FakeHls.instances.length === 1, "initial playback");
+  assert.match(elements.viewBar.innerHTML, /data-view="student_audio"[^>]*>\s*学生音频/);
+  elements.viewBar.listeners.click[0]({ target: { closest: () => ({ dataset: { view: "student_audio" } }) } });
+  assert.match(FakeHls.instances.at(-1).sources[0], /\/student_audio\/manifest/);
 });

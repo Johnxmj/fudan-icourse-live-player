@@ -94,3 +94,37 @@ test("listLiveCourses skips impossible calendar dates", async () => {
   };
   assert.deepEqual(await listLiveCourses(fetcher, ["1"], DAY3), []);
 });
+
+test('a later non-live lecture on the same day does not hide the current lecture', async () => {
+  const calls = [];
+  const fetcher = {
+    async getCourseDetail() { return { lectures: [{ sub_id: 'morning', date: '2999-01-01' }, { sub_id: 'later', date: '2999-01-01' }] }; },
+    async getSubInfo(courseId, subId) {
+      calls.push(subId);
+      return { ...info, sub_id: subId, sub_status: subId === 'morning' ? 1 : 0 };
+    },
+  };
+  assert.deepEqual((await listLiveCourses(fetcher, ['1'], DAY1)).map(course => course.sub_id), ['morning']);
+  assert.ok(calls.includes('morning'));
+});
+
+test('future lectures with a future end time are never probed', async () => {
+  const fetcher = {
+    async getCourseDetail() { return { lectures: [{ sub_id: 'future', date: '2999-01-02', start_at: '2999-01-02T09:00:00+08:00', end_at: '2999-01-02T10:00:00+08:00' }] }; },
+    async getSubInfo() { throw new Error('must not query a future lecture'); },
+  };
+  assert.deepEqual(await listLiveCourses(fetcher, ['1'], DAY1), []);
+});
+
+test('an unavailable course does not hide a live course but all failed probes remain errors', async () => {
+  const fetcher = {
+    async getCourseDetail(id) { if (id === 'broken') throw new Error('unavailable'); return detail; },
+    async getSubInfo() { return info; },
+  };
+  assert.equal((await listLiveCourses(fetcher, ['broken', '1'], DAY1)).length, 1);
+  await assert.rejects(listLiveCourses(fetcher, ['broken'], DAY1), /unavailable/);
+});
+
+test('an ended source reports an ended state so the player does not keep retrying', async () => {
+  await assert.rejects(resolveLiveSource({ async getSubInfo() { return { sub_status: 2 }; } }, '1', '2', 'teacher'), error => error.state === 'ended');
+});

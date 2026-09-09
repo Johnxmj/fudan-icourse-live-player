@@ -1,5 +1,7 @@
 import { createLocalTransport } from "./transport-local.js";
 
+const VIEW_LABELS = { teacher: "教师画面", student: "学生画面", teacher_audio: "教师音频", student_audio: "学生音频" };
+
 const STORAGE_KEYS = {
   railOpen: "live-player.rail-open",
 };
@@ -72,28 +74,22 @@ function getBootstrapBaseUrl(locationLike) {
 }
 
 function readBootstrapToken(locationLike) {
-  const search = trim(locationLike?.search || "");
-  if (!search) return "";
   try {
-    return trim(new URLSearchParams(search).get("bootstrap"));
-  } catch {
-    return "";
-  }
+    const fragment = new URLSearchParams(String(locationLike?.hash || "").replace(/^#/, ""));
+    return trim(fragment.get("bootstrap") || new URLSearchParams(locationLike?.search || "").get("bootstrap"));
+  } catch { return ""; }
 }
 
 function clearBootstrapTokenFromHistory(win, locationLike) {
-  const history = win?.history;
-  const href = locationLike?.href;
-  if (!history?.replaceState || !href) return;
+  if (!win?.history?.replaceState || !locationLike?.href) return;
   try {
-    const url = new URL(href);
-    if (!url.searchParams.has("bootstrap")) return;
+    const url = new URL(locationLike.href);
+    const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+    fragment.delete("bootstrap");
+    url.hash = fragment.toString();
     url.searchParams.delete("bootstrap");
-    const nextUrl = `${url.pathname}${url.search}${url.hash}` || "/";
-    history.replaceState(null, "", nextUrl);
-  } catch {
-    /* Ignore malformed location state. */
-  }
+    win.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}` || "/");
+  } catch { /* Ignore malformed location state. */ }
 }
 
 async function redeemBootstrapToken(fetchImpl, baseUrl, bootstrapToken) {
@@ -130,7 +126,7 @@ async function redeemBootstrapToken(fetchImpl, baseUrl, bootstrapToken) {
 }
 
 function courseLabel(course) {
-  const title = trim(course?.course_title) || "Untitled live course";
+  const title = trim(course?.course_title) || "直播课程";
   const subTitle = trim(course?.sub_title);
   return subTitle ? `${title} · ${subTitle}` : title;
 }
@@ -147,7 +143,7 @@ function errorKind(data) {
 }
 
 function isSessionExpired(data) {
-  const status = data?.response?.status ?? data?.response?.code ?? data?.response?.statusCode;
+  const status = data?.status ?? data?.response?.status ?? data?.response?.code ?? data?.response?.statusCode;
   if (status === 401 || status === 403) return true;
   const kind = errorKind(data).toLowerCase();
   return kind.includes("auth") || kind.includes("login");
@@ -189,7 +185,7 @@ export function createHls(HlsCtor, onFatal = () => {}, options = {}) {
   if (typeof hls.on === "function") {
     hls.on(errorEvent, (_event, data) => {
       if (data?.fatal) {
-        onFatal(data, hls);
+        return onFatal(data, hls);
       }
     });
   }
@@ -218,7 +214,7 @@ function createEmptyState() {
     railOpen: false,
     loading: false,
     statusTone: "muted",
-    statusText: "Connect to the local API to load live courses.",
+    statusText: "正在等待本地播放器连接。",
     courses: [],
     selectedCourseId: "",
     selectedView: "",
@@ -296,7 +292,7 @@ export function mountLivePlayerApp(options = {}) {
     if (els.tokenInput) {
       els.tokenInput.value = state.token;
     }
-    setConnectionHint(state.token ? "Connected to the local player API." : "Paste a session token to connect.");
+    setConnectionHint(state.token ? "已连接本地播放器。" : "请通过本地播放器启动入口打开此页面，即可自动连接。");
   }
 
   function setRailOpen(open) {
@@ -332,6 +328,7 @@ export function mountLivePlayerApp(options = {}) {
   }
 
   function clearPlayback() {
+    loadGeneration += 1;
     if (hls && typeof hls.destroy === "function") {
       try {
         hls.destroy();
@@ -382,9 +379,9 @@ export function mountLivePlayerApp(options = {}) {
         <span class="course-card__dot" aria-hidden="true"></span>
         <span class="course-card__copy">
           <strong>${escapeHtml(courseLabel(course))}</strong>
-          <span>${escapeHtml(courseMeta(course) || "Live now")}</span>
+          <span>${escapeHtml(courseMeta(course) || "正在直播")}</span>
         </span>
-        <span class="course-card__views">${availability} views</span>
+        <span class="course-card__views">${availability} 个视角</span>
       </button>
     `;
   }
@@ -394,8 +391,8 @@ export function mountLivePlayerApp(options = {}) {
     if (!state.courses.length) {
       els.railList.innerHTML = `
         <div class="empty-rail">
-          <strong>No live courses right now.</strong>
-          <span>Refresh once the platform marks a session live.</span>
+          <strong>当前没有直播课程。</strong>
+          <span>开课后点击刷新；也请核对已配置的课程。</span>
         </div>
       `;
       return;
@@ -405,21 +402,21 @@ export function mountLivePlayerApp(options = {}) {
 
   function renderCourseSummary() {
     if (els.courseCount) {
-      els.courseCount.textContent = `${state.courses.length} live`;
+      els.courseCount.textContent = `${state.courses.length} 门直播`;
     }
     if (els.courseTitle) {
-      els.courseTitle.textContent = state.activeCourse ? courseLabel(state.activeCourse) : "Choose a live course";
+      els.courseTitle.textContent = state.activeCourse ? courseLabel(state.activeCourse) : "选择直播课程";
     }
     if (els.courseMeta) {
-      els.courseMeta.textContent = state.activeCourse ? courseMeta(state.activeCourse) : "The player stays scoped to the current live session only.";
+      els.courseMeta.textContent = state.activeCourse ? courseMeta(state.activeCourse) : "选择左侧课程即可观看当前直播。";
     }
     if (els.courseBadge) {
-      els.courseBadge.textContent = state.activeCourse ? trim(state.activeCourse.status || "live") : "idle";
+      els.courseBadge.textContent = state.activeCourse ? "正在直播" : "待播放";
     }
     if (els.previewLine) {
       els.previewLine.textContent = state.activeCourse
-        ? `Source: ${state.activeCourse.course_id} / ${state.activeCourse.sub_id}`
-        : "Select a course to load its stream.";
+        ? "点击下方按钮可切换画面或音频。"
+        : "选择课程后加载直播。";
     }
   }
 
@@ -428,31 +425,28 @@ export function mountLivePlayerApp(options = {}) {
     const views = Array.isArray(state.activeCourse?.available_views) ? state.activeCourse.available_views.map(String) : [];
     if (!views.length) {
       els.viewBar.innerHTML = `
-        <div class="view-hint">No stream views are available for the selected course.</div>
+        <div class="view-hint">当前课程暂无可播放视角。</div>
       `;
       if (els.viewHint) {
-        els.viewHint.textContent = "The backend did not expose a playable stream variant.";
+        els.viewHint.textContent = "开课后请刷新课程重试。";
       }
       return;
     }
 
     els.viewBar.innerHTML = views.map((view) => `
-      <button type="button" class="view-chip${view === state.selectedView ? " is-active" : ""}" data-view="${escapeHtml(view)}">
-        ${escapeHtml(view)}
+      <button type="button" class="view-chip${view === state.selectedView ? " is-active" : ""}" data-view="${escapeHtml(view)}" aria-pressed="${view === state.selectedView}">
+        ${escapeHtml(VIEW_LABELS[view] || view)}
       </button>
     `).join("");
     if (els.viewHint) {
-      els.viewHint.textContent = `Available stream views: ${views.join(", ")}.`;
+      els.viewHint.textContent = `可选：${views.map(view => VIEW_LABELS[view] || view).join("、")}`;
     }
   }
 
   function renderVideoSourceLabel() {
     if (!els.video) return;
-    if (state.manifestUrl) {
-      els.video.dataset.source = state.manifestUrl;
-    } else {
-      delete els.video.dataset.source;
-    }
+    // Media credentials stay in the playback request, never in descriptive DOM attributes.
+    delete els.video.dataset.source;
   }
 
   function renderAll() {
@@ -490,8 +484,12 @@ export function mountLivePlayerApp(options = {}) {
   }
 
   function surfaceError(error, tone = "danger") {
-    const message = error?.message || "Live playback failed.";
-    setStatus(message, tone);
+    const messages = {
+      LOGIN_REQUIRED: "学校登录已失效，请重新启动本地播放器完成登录。",
+      UPSTREAM_FAILED: "无法连接学校直播平台，请检查校园网或 WebVPN 后重试。",
+      VIEW_UNAVAILABLE: "当前画面暂不可用，请切换视角或刷新课程。",
+    };
+    setStatus(messages[error?.code] || (error instanceof TypeError ? "网络连接失败，请确认本地播放器仍在运行，再检查校园网或 WebVPN。" : "暂时无法获取直播，请检查网络并刷新课程重试。"), tone);
   }
 
   function disposeHls() {
@@ -519,14 +517,15 @@ export function mountLivePlayerApp(options = {}) {
       return;
     }
     if (!state.selectedView) {
-      setStatus("No playable stream view is available for the selected course.", "warning");
+      clearPlayback();
+      setStatus("当前课程没有可播放视角，请刷新课程重试。", "warning");
       return;
     }
 
-    const generation = ++loadGeneration;
     const mediaToken = trim(course.media_token);
     if (!mediaToken) {
-      setStatus("No media token is available for the selected course.", "danger");
+      clearPlayback();
+      setStatus("播放凭证未准备好，请刷新课程重试。", "danger");
       return;
     }
     state.recovery.fragmentFailures = 0;
@@ -539,8 +538,9 @@ export function mountLivePlayerApp(options = {}) {
     const manifestUrl = transport.manifestUrl(course.course_id, course.sub_id, state.selectedView, mediaToken);
     state.manifestUrl = manifestUrl;
     renderVideoSourceLabel();
-    setStatus(`Loading ${courseLabel(course)} (${state.selectedView})...`, "live");
+    setStatus(`正在加载 ${courseLabel(course)} · ${VIEW_LABELS[state.selectedView] || state.selectedView}…`, "live");
     clearPlayback();
+    const generation = ++loadGeneration;
 
     const canUseHls = HlsCtor && typeof HlsCtor.isSupported === "function"
       ? HlsCtor.isSupported()
@@ -550,12 +550,12 @@ export function mountLivePlayerApp(options = {}) {
       els.video.src = manifestUrl;
       renderAll();
       await playVideo();
-      setStatus(`Playing ${courseLabel(course)} using the browser's native HLS support.`, "live");
+      setStatus(`已准备好播放 ${courseLabel(course)}，如未开始请点击播放按钮。`, "live");
       return;
     }
 
-    if (!HlsCtor) {
-      setStatus("This browser does not expose HLS.js, and native HLS is unavailable.", "danger");
+    if (!canUseHls) {
+      setStatus("当前浏览器无法播放此视频，请使用最新版 Chrome 或 Edge。", "danger");
       return;
     }
 
@@ -583,18 +583,19 @@ export function mountLivePlayerApp(options = {}) {
         if (activeLoad !== loadGeneration) {
           return;
         }
-        setStatus(`Ready to play ${courseLabel(course)} on ${state.selectedView}.`, "live");
+        setStatus(`已准备好播放 ${courseLabel(course)} · ${VIEW_LABELS[state.selectedView] || state.selectedView}，如未开始请点击播放按钮。`, "live");
         await playVideo();
       });
     }
   }
 
-  async function refreshCatalogAndPlayback() {
+  async function refreshCatalogAndPlayback({ preserveRecovery = false } = {}) {
     if (state.loading) {
       return;
     }
     state.loading = true;
-    setStatus("Refreshing live courses...", "muted");
+    if (!preserveRecovery) state.recovery.refreshAttempts = 0;
+    setStatus("正在刷新直播课程…", "muted");
     try {
       const nextCourses = await transport.refreshLiveCourses();
       state.courses = Array.isArray(nextCourses) ? nextCourses : [];
@@ -619,13 +620,14 @@ export function mountLivePlayerApp(options = {}) {
         state.selectedCourseId = "";
         state.selectedView = "";
         state.manifestUrl = "";
-        setStatus("No live courses are available right now.", "muted");
+        setStatus("当前没有直播课程，开课后请刷新。", "muted");
         renderAll();
       }
     } catch (error) {
       if (isSessionExpired(error)) {
         state.recovery.sessionExpired = true;
-        setStatus("Session expired. Paste a fresh token and reconnect.", "danger");
+        clearPlayback();
+        setStatus("登录已失效，请重新启动本地播放器完成登录。", "danger");
       } else {
         surfaceError(error);
       }
@@ -636,39 +638,44 @@ export function mountLivePlayerApp(options = {}) {
 
   async function connectAndLoad() {
     setTransport(els.baseUrlInput?.value, els.tokenInput?.value);
-    setStatus("Connecting to the local API...", "muted");
+    setStatus("正在连接本地播放器…", "muted");
     await refreshCatalogAndPlayback();
   }
 
   async function bootstrapAndLoad(bootstrapToken) {
     clearBootstrapTokenFromHistory(win, locationLike);
-    setStatus("Signing in with the launch token...", "muted");
+    setStatus("正在自动连接本地播放器…", "muted");
     let sessionToken;
     try {
       sessionToken = await redeemBootstrapToken(fetchImpl, getBootstrapBaseUrl(locationLike), bootstrapToken);
     } catch (error) {
       clearSessionToken();
       setStatus(
-        `Automatic sign-in failed. Paste a session token to continue. ${error?.message ? error.message : ""}`.trim(),
+        "自动连接失败。请关闭此页面，重新双击本地播放器启动入口。",
         "danger",
       );
       return;
     }
 
     applySessionToken(sessionToken);
-    setStatus("Signed in automatically. Loading live courses...", "muted");
+    setStatus("已自动连接，正在加载课程…", "muted");
     await refreshCatalogAndPlayback();
   }
 
   async function handleFatalError(data) {
+    if (isSessionExpired(data) && !state.recovery.sessionExpired && state.recovery.refreshAttempts < 1) {
+      // A media token can expire while the API session is still valid (e.g. after a long pause).
+      state.recovery.refreshAttempts += 1;
+      await refreshCatalogAndPlayback({ preserveRecovery: true });
+      return;
+    }
     if (state.recovery.sessionExpired || isSessionExpired(data)) {
-      state.recovery.sessionExpired = true;
-      disposeHls();
-      setStatus("The live session expired. Reconnect to continue.", "danger");
+      clearPlayback();
+      setStatus("播放授权未能恢复，请刷新课程；如仍失败，请重新启动本地播放器。", "danger");
       return;
     }
 
-    const nextFragmentFailures = state.recovery.fragmentFailures + (isFragmentFailure(data) ? 1 : 0);
+    const nextFragmentFailures = state.recovery.fragmentFailures + 1;
     const action = nextRecoveryAction({
       fragmentFailures: nextFragmentFailures,
       sessionExpired: false,
@@ -677,7 +684,7 @@ export function mountLivePlayerApp(options = {}) {
     if (data?.type === (HlsCtor?.ErrorTypes?.MEDIA_ERROR || "mediaError")) {
       if (state.recovery.mediaRecoveries < 1 && hls && typeof hls.recoverMediaError === "function") {
         state.recovery.mediaRecoveries += 1;
-        setStatus("Recovering the media buffer once...", "warning");
+        setStatus("正在恢复播放画面…", "warning");
         hls.recoverMediaError();
         return;
       }
@@ -686,14 +693,23 @@ export function mountLivePlayerApp(options = {}) {
     if (action === "refresh-source" && state.recovery.refreshAttempts < 1) {
       state.recovery.fragmentFailures = nextFragmentFailures;
       state.recovery.refreshAttempts += 1;
-      setStatus("Refreshing the live source once...", "warning");
-      await refreshCatalogAndPlayback();
+      setStatus("正在重新获取直播源…", "warning");
+      await refreshCatalogAndPlayback({ preserveRecovery: true });
       return;
     }
 
     state.recovery.fragmentFailures = nextFragmentFailures;
-    surfaceError(new Error(`Playback stalled after ${state.recovery.fragmentFailures} fragment failures.`));
+    if (action === "retry-fragment" && hls?.startLoad && state.recovery.fragmentFailures < 3) {
+      setStatus("直播连接中断，正在重试…", "warning");
+      hls.startLoad();
+      return;
+    }
+    setStatus("播放暂时中断，请检查校园网或 WebVPN，然后刷新课程重试。", "danger");
   }
+
+  els.video?.addEventListener("error", () => {
+    if (!hls && state.activeCourse) handleFatalError({ fatal: true, details: "manifestLoadError" }).catch(() => setStatus("视频连接中断，请刷新课程重试。", "danger"));
+  });
 
   function toggleFullscreen() {
     const target = root.querySelector("[data-stage]") || doc.documentElement;
@@ -739,7 +755,7 @@ export function mountLivePlayerApp(options = {}) {
       const button = event.target.closest("[data-view]");
       if (!button || !state.activeCourse) return;
       const nextView = button.dataset.view;
-      if (!nextView || nextView === state.selectedView) return;
+      if (!nextView || nextView === state.selectedView || !state.activeCourse.available_views?.includes(nextView)) return;
       state.selectedView = nextView;
       state.manifestUrl = transport.manifestUrl(
         state.activeCourse.course_id,
@@ -762,7 +778,7 @@ export function mountLivePlayerApp(options = {}) {
   } else if (state.token) {
     connectAndLoad().catch((error) => surfaceError(error));
   } else {
-    setStatus("Paste a session token to load the current live courses.", "muted");
+    setStatus("请通过本地播放器启动入口打开此页面，即可自动连接。", "muted");
   }
 
   const api = {
@@ -786,7 +802,7 @@ export function mountLivePlayerApp(options = {}) {
       return loadSelectedCourse();
     },
     destroy() {
-      disposeHls();
+      clearPlayback();
       setBoolStored(storage, STORAGE_KEYS.railOpen, state.railOpen);
     },
   };
