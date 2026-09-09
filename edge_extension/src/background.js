@@ -1,5 +1,5 @@
 import { listLiveCourses, resolveLiveSource } from './live-api.js';
-import { readCourseIds } from './course-settings.js';
+import { readCourseIds, saveCourseIds } from './course-settings.js';
 import {
   parseRequest,
   safeCourse,
@@ -15,11 +15,21 @@ import { WEBVPN_PREFIX } from './webvpn-url.js';
 const ALLOWED_PAGE_ORIGIN = 'https://johnxmj.github.io';
 const CAS_URL = 'https://webvpn.fudan.edu.cn/';
 const API_BASE = `${WEBVPN_PREFIX}/`;
+const SAFE_COURSE_ID = /^[A-Za-z0-9]{1,64}$/;
 export const PLAYER_HANDSHAKE = 'PLAYER_HANDSHAKE';
 export const PLAYER_SOURCE = 'PLAYER_SOURCE';
 export const OPEN_CAS_LOGIN = 'OPEN_CAS_LOGIN';
 
 let loginTabId = null;
+let loginTabSawPrompt = false;
+
+export function parseCourseIds(value) {
+  // Preserve normalization of legacy ID arrays; user input is validated by saveCourseIds.
+  const values = Array.isArray(value) ? value : String(value ?? '').split(/[\s,]+/);
+  return [...new Set(values
+    .map((item) => String(item ?? '').trim())
+    .filter((item) => SAFE_COURSE_ID.test(item)))];
+}
 
 /** Handle the small, public API exposed to the approved Pages origin. */
 export async function handleExternal(message, sender = {}, deps = {}) {
@@ -148,13 +158,15 @@ export async function openCasLogin({ tabsCreate } = {}) {
   if (typeof create !== 'function') throw new Error('tabs unavailable');
   const tab = await create({ url: CAS_URL });
   loginTabId = tab?.id ?? null;
+  loginTabSawPrompt = false;
   return tab;
 }
 
 export function createBackgroundHandlers(deps = {}) {
   const fetcher = deps.fetcher || defaultFetcher;
   const probe = deps.probe || (() => probeSession(deps));
-  const getCourseIds = deps.getCourseIds || (() => readCourseIds(deps.storage));
+  const storage = deps.storage || (typeof deps.storageGet === 'function' ? { get: deps.storageGet } : undefined);
+  const getCourseIds = deps.getCourseIds || (() => readCourseIds(storage));
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
 
@@ -177,6 +189,7 @@ export function createBackgroundHandlers(deps = {}) {
   }
 
   return {
+    getSessionState: refreshSession,
     async handle(message) {
       const request = parseRequest(message);
       if (request.type === CAPABILITIES) {
@@ -297,7 +310,7 @@ export function isLoginCompleteUrl(value) {
     const webVpnRoute = new URL(WEBVPN_PREFIX).pathname.replace(/\/+$/, '');
     return (
       url.hostname === 'webvpn.fudan.edu.cn'
-      && (url.pathname === webVpnRoute || url.pathname.startsWith(`${webVpnRoute}/`))
+      && (url.pathname === '/' || url.pathname === webVpnRoute || url.pathname.startsWith(`${webVpnRoute}/`))
     );
   } catch (_) {
     return false;
@@ -314,20 +327,50 @@ export function installLoginTabWatcher(
   updated.addListener((tabId, changeInfo = {}, tab = {}) => {
     if (tabId !== loginTabId) return;
     const destination = changeInfo.url || tab.url;
+    if (isWebVpnLoginUrl(destination)) {
+      loginTabSawPrompt = true;
+      return;
+    }
     if (!isLoginCompleteUrl(destination)) return;
 
-    const completedTabId = loginTabId;
-    loginTabId = null;
-    Promise.resolve()
-      .then(() => chromeApi.tabs.remove?.(completedTabId))
-      .catch(() => {});
+    const isWebVpnHome = (() => {
+      try {
+        const url = new URL(destination);
+        return url.hostname === 'webvpn.fudan.edu.cn' && url.pathname === '/';
+      } catch (_) {
+        return false;
+      }
+    })();
+    if (isWebVpnHome && !loginTabSawPrompt) return;
     const refresh = onRefresh || (
       typeof handlers.refresh === 'function'
         ? () => handlers.refresh()
         : () => handlers.handle({ version: PROTOCOL_VERSION, type: REFRESH, payload: {} })
     );
-    Promise.resolve().then(refresh).catch(() => {});
+    const checkSession = typeof handlers.getSessionState === 'function' ? () => handlers.getSessionState() : refresh;
+    Promise.resolve()
+      .then(checkSession)
+      .then((result) => {
+        // The WebVPN home is also the pre-login redirect target. Only close it
+        // after the authenticated API check confirms a ready session.
+        if (isWebVpnHome && result?.state !== 'ready') return;
+        if (loginTabId !== tabId) return;
+        const completedTabId = tabId;
+        loginTabId = null;
+        if (checkSession !== refresh) Promise.resolve().then(refresh).catch(() => {});
+        return chromeApi.tabs.remove?.(completedTabId);
+      })
+      .catch(() => {});
   });
+}
+
+function isWebVpnLoginUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.hostname === 'webvpn.fudan.edu.cn' && url.pathname === '/login';
+  } catch (_) {
+    return false;
+  }
 }
 
 export function installRuntimeListeners(
@@ -339,6 +382,21 @@ export function installRuntimeListeners(
 
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isAllowedSender(sender, false, chromeApi)) return false;
+
+    if (message?.type === 'GET_COURSE_IDS') {
+      readCourseIds(chromeApi.storage?.local)
+        .then((courseIds) => sendResponse({ courseIds }))
+        .catch(() => sendResponse({ courseIds: [] }));
+      return true;
+    }
+
+    if (message?.type === 'SET_COURSE_IDS') {
+      const input = Array.isArray(message.courseIds) ? parseCourseIds(message.courseIds).join('\n') : message.courseIds;
+      saveCourseIds(input, chromeApi.storage?.local)
+        .then((courseIds) => sendResponse({ ok: true, courseIds }))
+        .catch((error) => sendResponse({ ok: false, error: error instanceof TypeError ? 'invalid course IDs' : 'storage unavailable' }));
+      return true;
+    }
 
     if (message?.type === PLAYER_HANDSHAKE) {
       try {

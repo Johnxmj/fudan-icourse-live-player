@@ -59,6 +59,19 @@ node edge_extension/scripts/build.mjs
 Load `dist/edge-extension` in `edge://extensions` with Developer mode enabled.
 The generated ZIP is `dist/fudan-icourse-live-edge.zip`.
 
+After loading the extension, open its popup and enter the iCourse IDs in the
+`关注的课程` field (comma, space or newline separated), then click `保存并检查课程`.
+For example:
+
+```text
+37142, 37234, 38154, 38463, 38723
+```
+
+The IDs are stored only in the browser extension's local storage. Click
+`复旦官方登录` once to establish the official session, then refresh
+the Pages player. The extension lists only courses that are live right now;
+an empty list does not indicate that a replay is available.
+
 ## Test
 
 ```powershell

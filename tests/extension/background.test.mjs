@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readCourseIds, saveCourseIds } from '../../edge_extension/src/course-settings.js';
 
 import {
   probeSession,
   openCasLogin,
   createBackgroundHandlers,
+  parseCourseIds,
   handleExternalOpenPlayer,
   isLoginCompleteUrl,
+  installLoginTabWatcher,
   installRuntimeListeners,
 } from '../../edge_extension/src/background.js';
 
@@ -383,8 +386,63 @@ test('external LIST_LIVE uses the authenticated background catalog', async () =>
 test('login completion recognizes direct iCourse and routed WebVPN URLs', () => {
   assert.equal(isLoginCompleteUrl('https://icourse.fudan.edu.cn/'), true);
   assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/https/77726476706e69737468656265737421f9f44e8935236d1e781d8dad961b2631a501f26f/courseapi/v3'), true);
-  assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/'), false);
+  assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/'), true);
   assert.equal(isLoginCompleteUrl('https://webvpn.fudan.edu.cn/login'), false);
+});
+
+test('course ID settings are normalized and deduplicated', () => {
+  assert.deepEqual(parseCourseIds('37142, 37234 37142\n38154'), ['37142', '37234', '38154']);
+  assert.deepEqual(parseCourseIds(['37142', 'bad-id!', '37142']), ['37142']);
+});
+
+test('handlers read configured course IDs from extension storage', async () => {
+  const calls = [];
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storageGet: async () => ({ courseIds: ['37142'] }),
+    listLive: async (_fetcher, ids) => { calls.push(ids); return []; },
+  });
+  await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} });
+  assert.deepEqual(calls, [['37142']]);
+});
+
+test('WebVPN home waits for a confirmed ready session before closing login tab', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 74 }) });
+  const listeners = [];
+  const removed = [];
+  let state = 'login-required';
+  installLoginTabWatcher({
+    tabs: {
+      onUpdated: { addListener(listener) { listeners.push(listener); } },
+      remove: async (tabId) => removed.push(tabId),
+    },
+  }, { refresh: async () => ({ state }) });
+
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/login' });
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, []);
+
+  state = 'ready';
+  listeners[0](74, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, [74]);
+});
+
+test('initial WebVPN home does not close the login tab before the auth page', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 75 }) });
+  const listeners = [];
+  const removed = [];
+  installLoginTabWatcher({
+    tabs: {
+      onUpdated: { addListener(listener) { listeners.push(listener); } },
+      remove: async (tabId) => removed.push(tabId),
+    },
+  }, { refresh: async () => ({ state: 'ready' }) });
+
+  listeners[0](75, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(removed, []);
 });
 
 test('CAS completion closes only the created tab and refreshes handlers', async () => {
@@ -450,6 +508,34 @@ test('runtime listeners route versioned protocol requests through handlers', asy
   assert.deepEqual(responses, [{ state: 'ready' }]);
 });
 
+test('runtime listeners expose course ID settings to the popup', async () => {
+  const listeners = [];
+  let stored = [];
+  installRuntimeListeners({
+    runtime: {
+      id: 'extension-id',
+      onMessage: { addListener(listener) { listeners.push(listener); } },
+      onMessageExternal: { addListener() {} },
+    },
+    storage: {
+      local: {
+        get: async () => ({ courseIds: stored }),
+        set: async ({ courseIds }) => { stored = courseIds; },
+      },
+    },
+    tabs: {},
+  }, { handle: async () => ({ state: 'ready' }), source: async () => 'unused' });
+  const getResponses = [];
+  listeners.at(-1)({ type: 'GET_COURSE_IDS' }, { id: 'extension-id' }, (value) => getResponses.push(value));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(getResponses, [{ courseIds: [] }]);
+  const setResponses = [];
+  listeners.at(-1)({ type: 'SET_COURSE_IDS', courseIds: '37142,37234,37142' }, { id: 'extension-id' }, (value) => setResponses.push(value));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(setResponses, [{ ok: true, courseIds: ['37142', '37234'] }]);
+  assert.deepEqual(stored, ['37142', '37234']);
+});
+
 test('popup exposes a user-triggered CAS login action', async () => {
   const { readFileSync } = await import('node:fs');
   const html = readFileSync('edge_extension/popup/index.html', 'utf8');
@@ -458,6 +544,8 @@ test('popup exposes a user-triggered CAS login action', async () => {
   assert.match(html, /popup\.js/);
   assert.match(script, /OPEN_CAS_LOGIN/);
   assert.match(script, /addEventListener\(["']click["']/);
+  assert.match(html, /id=["']course-ids["']/);
+  assert.match(script, /saveCourseIds/);
 });
 
 test('production handlers read saved courses and refresh changes without a restart', async () => {
@@ -506,4 +594,48 @@ test('player source failures return only a safe actionable state', async () => {
   listeners[0]({ type: 'PLAYER_SOURCE', payload: { courseId: 'c1', subId: 's1', view: 'teacher' } }, { id: 'extension-id' }, value => { result = value; });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(result, { ok: false, error: 'live source unavailable', state: 'login-required' });
+});
+
+test('legacy settings messages and the URL-aware popup share one courseIds store', async () => {
+  let saved = {};
+  const storage = { async get() { return saved; }, async set(value) { saved = value; } };
+  const listeners = [];
+  const chromeApi = { runtime: { id: 'extension-id', onMessage: { addListener(fn) { listeners.push(fn); } } }, storage: { local: storage }, tabs: {} };
+  installRuntimeListeners(chromeApi, createBackgroundHandlers({ storage, probe: async () => ({ state: 'ready' }) }));
+  const send = message => new Promise(resolve => listeners[0](message, { id: 'extension-id' }, resolve));
+  await saveCourseIds('https://icourse.fudan.edu.cn/?course_id=123', storage);
+  assert.deepEqual(await send({ type: 'GET_COURSE_IDS' }), { courseIds: ['123'] });
+  assert.deepEqual(await send({ type: 'SET_COURSE_IDS', courseIds: 'https://icourse.fudan.edu.cn/?course_id=456' }), { ok: true, courseIds: ['456'] });
+  assert.deepEqual(await readCourseIds(storage), ['456']);
+  const invalid = await send({ type: 'SET_COURSE_IDS', courseIds: 'invalid!' });
+  assert.equal(invalid.ok, false);
+  assert.deepEqual(await readCourseIds(storage), ['456']);
+});
+
+test('a confirmed login can finish before any course has been configured', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 76 }) });
+  const listeners = [];
+  const removed = [];
+  installLoginTabWatcher({ tabs: { onUpdated: { addListener(fn) { listeners.push(fn); } }, remove: async id => removed.push(id) } },
+    createBackgroundHandlers({ probe: async () => ({ state: 'ready' }), getCourseIds: async () => [] }));
+  listeners[0](76, { url: 'https://webvpn.fudan.edu.cn/login' });
+  listeners[0](76, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(removed, [76]);
+});
+
+test('a delayed login check cannot close a newer login tab', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 77 }) });
+  const listeners = [];
+  const removed = [];
+  let confirm;
+  installLoginTabWatcher({ tabs: { onUpdated: { addListener(fn) { listeners.push(fn); } }, remove: async id => removed.push(id) } },
+    { refresh: () => new Promise(resolve => { confirm = resolve; }) });
+  listeners[0](77, { url: 'https://webvpn.fudan.edu.cn/login' });
+  listeners[0](77, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise(resolve => setImmediate(resolve));
+  await openCasLogin({ tabsCreate: async () => ({ id: 78 }) });
+  confirm({ state: 'ready' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(removed, []);
 });
