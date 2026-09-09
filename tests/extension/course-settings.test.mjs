@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCourseIds, readCourseIds, saveCourseIds } from '../../edge_extension/src/course-settings.js';
+import * as settings from '../../edge_extension/src/course-settings.js';
 
 test('accepts IDs and official course links while storing only deduplicated identifiers', async () => {
   const input = '123，abc\nhttps://icourse.fudan.edu.cn/course?course_id=456&other=ignored\nhttps://icourse.fudan.edu.cn/#/course-detail?courseId=789\n123';
@@ -24,4 +25,15 @@ test('rejects malformed input instead of silently deleting configured courses', 
 
 test('invalid saved values are not exposed as course identifiers', async () => {
   assert.deepEqual(await readCourseIds({ async get() { return { courseIds: ['123', '123', 'https://secret.invalid'] }; } }), ['123']);
+});
+
+test('directory selections preserve existing courses, deduplicate, and enforce the 200-course limit', async () => {
+  assert.equal(typeof settings.saveCourseSelection, 'function');
+  let saved = { courseIds: ['old', 'remove'] };
+  const storage = { async get() { return saved; }, async set(value) { saved = value; } };
+  assert.deepEqual(await settings.saveCourseSelection([{ courseId: 'new', selected: true }, { courseId: 'remove', selected: false }, { courseId: 'old', selected: true }], storage), ['old', 'new']);
+  saved.courseIds = Array.from({ length: 200 }, (_, index) => String(index));
+  await assert.rejects(settings.saveCourseSelection([{ courseId: 'extra', selected: true }], storage), /200/);
+  assert.equal(saved.courseIds.length, 200);
+  await assert.rejects(settings.saveCourseSelection([{ selected: true }], storage), /选择/);
 });

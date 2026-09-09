@@ -639,3 +639,60 @@ test('a delayed login check cannot close a newer login tab', async () => {
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(removed, []);
 });
+
+test('authenticated directory messages search official metadata without exposing upstream fields', async () => {
+  const requests = [];
+  const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'ready' }), fetcher: {
+    async getDirectoryTerms() { return { terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1' }; },
+    async getCourseList(params) { requests.push(params); return { total: 2, list: [{ id: '1', title: '数学分析', realname: '王老师', live_url: 'private' }, { id: '2', title: '大学物理', realname: '李老师' }] }; },
+  } });
+  assert.equal(typeof handlers.directory, 'function');
+  const listeners = [];
+  installRuntimeListeners({ runtime: { id: 'extension-id', onMessage: { addListener(fn) { listeners.push(fn); } } }, tabs: {} }, handlers);
+  const send = message => new Promise(resolve => listeners[0](message, { id: 'extension-id' }, resolve));
+  assert.deepEqual(await send({ type: 'GET_DIRECTORY_TERMS' }), { state: 'ready', terms: [{ id: 'term1', title: '测试学期' }], currentTerm: 'term1' });
+  const result = await send({ type: 'SEARCH_COURSES', term: 'term1', query: '李老师', page: 1, perPage: 20 });
+  assert.equal(result.state, 'ready');
+  assert.deepEqual(result.courses, [{ course_id: '2', course_title: '大学物理', teacher: '李老师' }]);
+  assert.equal(requests[0].tenant, 222);
+  assert.doesNotMatch(JSON.stringify(result), /live_url|private/);
+});
+
+test('directory login failure skips all catalog requests and remains actionable', async () => {
+  const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'login-required' }), fetcher: {
+    async getCourseList() { throw new Error('must not call'); },
+  } });
+  assert.equal(typeof handlers.directory, 'function');
+  assert.deepEqual(await handlers.directory({ type: 'SEARCH_COURSES', term: 'term1', query: '' }), { state: 'login-required' });
+});
+
+test('directory search uses the official paginated portal endpoint with the selected term', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async input => { calls.push(String(input)); return { status: 200, url: String(input), json: async () => ({ code: 0, data: { total: 1, list: [{ id: '1', title: '课程', realname: '教师' }] } }) }; };
+  try {
+    const result = await createBackgroundHandlers({ probe: async () => ({ state: 'ready' }) }).directory({ type: 'SEARCH_COURSES', term: 'term1', query: '教师' });
+    assert.equal(result.state, 'ready');
+    const url = new URL(calls[0]);
+    assert.match(url.pathname, /\/portal\/courseapi\/v3\/multi-search\/get-course-list$/);
+    assert.equal(url.searchParams.get('term'), 'term1');
+    assert.equal(url.searchParams.get('tenant'), '222');
+    assert.equal(url.searchParams.get('page'), '1');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('term discovery reads the recent official course page without specifying a term', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async input => { calls.push(String(input)); return { status: 200, url: String(input), json: async () => ({ code: 0, data: { total: 25250, list: [{ term: '_27_', term_name: '2026-20271' }] } }) }; };
+  try {
+    const result = await createBackgroundHandlers({ probe: async () => ({ state: 'ready' }) }).directory({ type: 'GET_DIRECTORY_TERMS' });
+    assert.equal(result.state, 'ready');
+    assert.equal(result.currentTerm, '27');
+    const url = new URL(calls[0]);
+    assert.match(url.pathname, /\/portal\/courseapi\/v3\/multi-search\/get-course-list$/);
+    assert.equal(url.searchParams.has('term'), false);
+    assert.equal(url.searchParams.get('per_page'), '500');
+    assert.equal(calls.length, 1);
+  } finally { globalThis.fetch = previousFetch; }
+});

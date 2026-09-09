@@ -201,7 +201,7 @@ class ICourseClient:
         return items
 
     def get_course_list(
-        self, term: str = "24", page: int = 1, per_page: int = 20
+        self, term: str | None = "24", page: int = 1, per_page: int = 20
     ) -> dict:
         """Get a paginated list of courses for a given term.
 
@@ -214,10 +214,11 @@ class ICourseClient:
         # ``title=""`` as "search for nothing" rather than "no filter".
         params: dict[str, str | int] = {
             "tenant": config.TENANT_CODE,
-            "term": term,
             "page": page,
             "per_page": per_page,
         }
+        if term is not None and str(term).strip():
+            params["term"] = str(term)
         for key in ("title", "kkxy_code", "course_type", "course_student_type"):
             val = getattr(config, key.upper(), "") if key.isupper() else ""
             if not val:
@@ -230,19 +231,46 @@ class ICourseClient:
         if data.get("code") != 0:
             raise RuntimeError(f"API error: {data.get('msg')}")
 
-        result = data.get("data", {})
-        return {
-            "total": int(result.get("total", 0)),
-            "courses": result.get("list", []),
-        }
+        result = data.get("data")
+        if not isinstance(result, dict) or not isinstance(result.get("list"), list):
+            raise RuntimeError("invalid course catalog response")
+        total = result.get("total")
+        if isinstance(total, str) and total.strip().isascii() and total.strip().isdecimal():
+            total = int(total.strip())
+        if type(total) is not int or total < 0:
+            raise RuntimeError("invalid course catalog total")
+        return {"total": total, "courses": result["list"]}
 
-    def discover_terms(self, code_min: int = 10,
-                       code_max: int = 35) -> list[dict]:
-        """Scan term codes to discover all available semesters.
+    def discover_terms(self, code_min: int | None = None,
+                       code_max: int | None = None) -> list[dict]:
+        """Discover terms from the official recent-course page, newest first.
 
-        Returns ``[{code, name, count}]`` sorted by code descending
-        (newest first).  Only codes returning >0 courses are included.
+        Default discovery does not guess future numeric codes. Counts remain
+        the platform's advertised term totals, which may include hidden courses.
+        Explicit numeric bounds retain the legacy range-scan API.
         """
+        if code_min is None and code_max is None:
+            recent = self.get_course_list(term=None, page=1, per_page=500)
+            if recent["total"] == 0:
+                return []
+            terms = {}
+            for course in recent["courses"]:
+                if not isinstance(course, dict):
+                    continue
+                match = re.fullmatch(r"_?(\d+)_?", str(course.get("term", "")).strip())
+                if match:
+                    code = match.group(1)
+                    terms.setdefault(code, course.get("term_name") or code)
+            if not terms:
+                raise RuntimeError("official recent courses did not identify a semester")
+            results = []
+            for code in sorted(terms, key=int, reverse=True):
+                total = self.get_course_list(term=code, page=1, per_page=1)["total"]
+                if total:
+                    results.append({"code": code, "name": terms[code], "count": total})
+            return results
+        code_min = 10 if code_min is None else code_min
+        code_max = 35 if code_max is None else code_max
         results: list[dict] = []
         for code in range(code_min, code_max + 1):
             try:
@@ -260,42 +288,56 @@ class ICourseClient:
                 continue
         return sorted(results, key=lambda x: -int(x["code"]))
 
-    def list_semester_courses(self, term: str,
-                              per_page: int = 500) -> list[dict]:
-        """Walk every page of get-course-list for ``term``.
+    def list_semester_courses(self, term: str, per_page: int = 500,
+                              *, max_pages: int = 1000) -> list[dict]:
+        """Read the complete semester catalog even when the server caps page size.
 
-        Uses ``total`` from the first response to compute the exact page
-        count — no hard-coded max.  (Caller must ensure the API hasn't
-        silently capped ``per_page`` below the requested value.)
-
-        Returns a flat list of ``{course_id, title, teacher, dept}`` dicts,
-        deduped by course_id.
+        ``total`` can include hidden courses. Read the declared page range and
+        continue until all advertised IDs are seen or an empty tail confirms the
+        visible catalog is exhausted. Short pages never imply completion because
+        the server may cap page size. Nonempty repeated, malformed, or changing
+        pages raise; ``max_pages`` bounds broken pagination.
+        Returns public ``{course_id, title, teacher, dept, course_code}`` metadata.
         """
-        import math
-
+        if type(per_page) is not int or per_page < 1:
+            raise ValueError("per_page must be a positive integer")
+        if type(max_pages) is not int or max_pages < 1:
+            raise ValueError("max_pages must be a positive integer")
         out: list[dict] = []
         seen: set[str] = set()
-
-        # Page 1 — discover total
-        result = self.get_course_list(
-            term=term, page=1, per_page=per_page,
-        )
-        total_expected = result.get("total") or 0
-        if not total_expected:
-            return out
-        total_pages = max(1, math.ceil(total_expected / per_page))
-
-        def _process(page_items):
+        total_expected = None
+        for page in range(1, max_pages + 1):
+            result = self.get_course_list(term=term, page=page, per_page=per_page)
+            if not isinstance(result, dict):
+                raise RuntimeError("invalid course catalog response")
+            total = result.get("total")
+            page_items = result.get("courses")
+            if type(total) is not int or total < 0 or not isinstance(page_items, list):
+                raise RuntimeError("invalid course catalog response")
+            if total_expected is None:
+                total_expected = total
+            elif total != total_expected:
+                raise RuntimeError("course catalog changed during pagination; retry the query")
+            if total_expected == 0 and not page_items:
+                return []
+            declared_pages = max(1, (total_expected + per_page - 1) // per_page)
+            if not page_items:
+                if page >= declared_pages:
+                    return out
+                continue
+            previous_count = len(seen)
             for raw in page_items:
+                if not isinstance(raw, dict):
+                    raise RuntimeError("invalid course catalog entry")
                 cid = raw.get("id") or raw.get("course_id")
-                if not cid:
-                    continue
-                cid = str(cid)
+                if type(cid) not in (str, int) or not str(cid).strip():
+                    raise RuntimeError("invalid course catalog identifier")
+                cid = str(cid).strip()
                 if cid in seen:
                     continue
                 seen.add(cid)
                 dept = (
-                    raw.get("kkxy_name") or raw.get("school_name")
+                    raw.get("kkxy_name") or raw.get("structure_name") or raw.get("school_name")
                     or raw.get("dept_name") or raw.get("kkxy") or None
                 )
                 out.append({
@@ -303,24 +345,15 @@ class ICourseClient:
                     "title": raw.get("title") or "",
                     "teacher": raw.get("realname") or raw.get("teacher") or "",
                     "dept": dept,
+                    "course_code": raw.get("course_code") or "",
                 })
-
-        page_items = result.get("courses", [])
-        if not page_items:
-            return out
-        _process(page_items)
-
-        # Remaining pages 2 .. total_pages
-        for page in range(2, total_pages + 1):
-            result = self.get_course_list(
-                term=term, page=page, per_page=per_page,
-            )
-            page_items = result.get("courses", [])
-            if not page_items:
-                break
-            _process(page_items)
-
-        return out
+            if len(seen) > total_expected:
+                raise RuntimeError("course catalog total does not match returned entries")
+            if len(seen) == total_expected and page >= declared_pages:
+                return out
+            if len(seen) == previous_count:
+                raise RuntimeError("course catalog pagination made no progress")
+        raise RuntimeError("course catalog pagination exceeded the page limit")
 
     def get_lecture_detail(self, course_id: str, sub_id: str) -> dict:
         """Get details for a specific lecture, including video URL info.

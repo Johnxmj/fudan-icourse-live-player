@@ -1,4 +1,5 @@
 import { readCourseIds, saveCourseIds } from '../src/course-settings.js';
+import { createDirectoryPicker } from './directory.js';
 
 export function sortLiveCourses(courses = []) {
   return [...courses].sort((a, b) => String(a?.starts_at || '').localeCompare(String(b?.starts_at || '')));
@@ -15,6 +16,10 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
   const refreshButton = document.getElementById('refresh');
   const storage = chromeApi?.storage?.local;
   let generation = 0;
+  const directory = createDirectoryPicker({ documentRef, chromeApi, storage, onSaved: async ids => {
+    input.value = ids.join('\n');
+    await loadLive();
+  } });
 
   function renderCourses(courses) {
     list.replaceChildren(...sortLiveCourses(courses).map(course => {
@@ -66,6 +71,7 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
     try {
       const ids = await saveCourseIds(input.value, storage);
       input.value = ids.join('\n');
+      directory.setSavedCourseIds(ids);
       await loadLive();
     } catch (error) {
       status.textContent = error instanceof TypeError ? error.message : '课程保存失败，请重新打开扩展后重试。';
@@ -85,9 +91,10 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
 
   const ready = readCourseIds(storage).then(ids => {
     input.value = ids.join('\n');
+    directory.setSavedCourseIds(ids);
     return loadLive();
   }).catch(() => { status.textContent = '无法读取课程配置，请重新打开扩展。'; });
-  return { ready, loadLive };
+  return { ready, loadLive, directory };
 }
 
 if (typeof document !== 'undefined') createPopup();
