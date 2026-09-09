@@ -1,4 +1,4 @@
-import { saveCourseSelection } from '../src/course-settings.js';
+import { readCourseSelections, readSelectedTerm, saveCourseSelection, saveSelectedTerm } from '../src/course-settings.js';
 
 export function createDirectoryPicker({ documentRef = globalThis.document, chromeApi = globalThis.chrome, storage = chromeApi?.storage?.local, onSaved = async () => {} } = {}) {
   const document = documentRef;
@@ -10,20 +10,28 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   const results = document.getElementById('directory-results');
   const status = document.getElementById('directory-status');
   const count = document.getElementById('directory-followed');
+  const followedList = document.getElementById('directory-followed-list');
   const previous = document.getElementById('directory-previous');
   const next = document.getElementById('directory-next');
   const saveButton = document.getElementById('directory-save');
-  let saved = new Set();
+  let saved = new Map();
   const changes = new Map();
   let currentCourses = [];
   let page = 1;
   let generation = 0;
 
   function updateSelectionState() {
-    const projected = new Set(saved);
-    for (const [id, selected] of changes) { if (selected) projected.add(id); else projected.delete(id); }
+    const projected = new Map(saved);
+    for (const [id, selected] of changes) { if (selected) projected.set(id, projected.get(id) || { course_id: id }); else projected.delete(id); }
     count.textContent = `已关注 ${saved.size} 门课程${changes.size ? `，保存后为 ${projected.size} 门` : ''}。`;
     saveButton.disabled = changes.size === 0;
+    if (followedList) {
+      followedList.replaceChildren(...[...projected.values()].map(course => {
+        const item = document.createElement('li');
+        item.textContent = `${course.course_title || '课程 ' + course.course_id}${course.teacher ? ` · ${course.teacher}` : ''}`;
+        return item;
+      }));
+    }
   }
 
   function renderCourses(courses) {
@@ -76,7 +84,9 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
         option.textContent = item.title;
         return option;
       }));
-      term.value = result.terms.some(item => item.id === result.currentTerm) ? result.currentTerm : result.terms[0].id;
+      const remembered = await readSelectedTerm(storage);
+      const preferred = remembered?.id || result.currentTerm;
+      term.value = result.terms.some(item => item.id === preferred) ? preferred : result.terms[0].id;
       searchButton.disabled = false;
       status.textContent = '已识别最近课程所属学期。输入课程名、教师、学院或课程代码后搜索；留空可浏览本学期可见课程。';
     } catch (_) { if (current === generation) showError(); }
@@ -107,9 +117,12 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   async function saveSelection() {
     saveButton.disabled = true;
     try {
-      const ids = await saveCourseSelection([...changes].map(([courseId, selected]) => ({ courseId, selected })), storage);
+      const selections = currentCourses.map(course => ({ ...course }));
+      const byId = new Map(selections.map(course => [course.course_id, course]));
+      const ids = await saveCourseSelection([...changes].map(([courseId, selected]) => ({ courseId, selected, course: byId.get(courseId) })), storage);
       changes.clear();
-      saved = new Set(ids);
+      const latest = await readCourseSelections(storage);
+      saved = new Map(latest.map(course => [course.course_id, course]));
       renderCourses(currentCourses);
       updateSelectionState();
       status.textContent = `已保存 ${ids.length} 门关注课程，正在检查直播。`;
@@ -131,7 +144,11 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
     status.textContent = '查询条件已更新，请点击搜索。';
   };
   query.addEventListener('input', resetSearch);
-  term.addEventListener('change', resetSearch);
+  term.addEventListener('change', () => {
+    const option = [...(term.options || [])].find(item => item.value === term.value);
+    if (storage?.set) void saveSelectedTerm({ id: term.value, title: option?.textContent || '' }, storage);
+    resetSearch();
+  });
   form.addEventListener('submit', event => { event.preventDefault(); return search(1); });
   previous.addEventListener('click', () => search(page - 1));
   next.addEventListener('click', () => search(page + 1));
@@ -139,6 +156,7 @@ export function createDirectoryPicker({ documentRef = globalThis.document, chrom
   updateSelectionState();
   return {
     loadTerms, search, saveSelection,
-    setSavedCourseIds(ids) { saved = new Set(ids); changes.clear(); renderCourses(currentCourses); updateSelectionState(); },
+    setSavedCourseIds(ids) { saved = new Map((Array.isArray(ids) ? ids : []).map(id => [id, { course_id: id }])); changes.clear(); renderCourses(currentCourses); updateSelectionState(); },
+    setSavedCourses(values) { saved = new Map((Array.isArray(values) ? values : []).map(course => [course.course_id, course])); changes.clear(); renderCourses(currentCourses); updateSelectionState(); },
   };
 }

@@ -1,4 +1,4 @@
-import { readCourseIds, saveCourseIds } from '../src/course-settings.js';
+import { readCourseSelections, saveCourseIds } from '../src/course-settings.js';
 import { createDirectoryPicker } from './directory.js';
 
 export function sortLiveCourses(courses = []) {
@@ -89,9 +89,10 @@ export function createPopup({ documentRef = globalThis.document, chromeApi = glo
     finally { loginButton.disabled = false; }
   });
 
-  const ready = readCourseIds(storage).then(ids => {
+  const ready = readCourseSelections(storage).then(selections => {
+    const ids = selections.map(item => item.course_id);
     input.value = ids.join('\n');
-    directory.setSavedCourseIds(ids);
+    directory.setSavedCourses(selections);
     return loadLive();
   }).catch(() => { status.textContent = '无法读取课程配置，请重新打开扩展。'; });
   return { ready, loadLive, directory };

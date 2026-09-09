@@ -33,7 +33,10 @@ test('users can search by teacher, select results, and preserve existing followe
   checkbox.checked = true;
   checkbox.listeners.change();
   await picker.saveSelection();
-  assert.deepEqual(saved, { courseIds: ['old', 'new'] });
+  assert.deepEqual(saved, {
+    courseIds: ['old', 'new'],
+    courseSelections: [{ course_id: 'old' }, { course_id: 'new', course_title: '数学分析', teacher: '王老师' }],
+  });
   assert.deepEqual(onSavedIds, ['old', 'new']);
 });
 
