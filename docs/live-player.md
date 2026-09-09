@@ -1,29 +1,47 @@
 # 当前直播播放器使用说明
 
-这是独立的 Fudan iCourse 当前直播项目，只处理正在进行的课程。GitHub Pages 不提供云端代理，必须连接 Edge 扩展或本地播放器。
+## 推荐入口：Chrome / Edge 扩展
 
-## 三种入口
+1. 使用 Node.js 22+ 运行 `node edge_extension/scripts/build.mjs`，得到 `dist/edge-extension` 和扩展 ZIP。
+2. 打开 `chrome://extensions` 或 `edge://extensions`，启用开发者模式，点击“加载已解压的扩展程序”，选择 `dist/edge-extension` 文件夹。文件夹应保留在固定位置。
+3. 点击浏览器工具栏的扩展图标，选择“复旦官方登录”。在学校自己的 CAS / WebVPN 页面完成登录；播放器不接收网页中输入的密码。
+4. 在扩展中粘贴课程 ID 或 iCourse 课程详情链接，可分行填写多个课程，然后保存。课程 ID 是链接中的 `course_id`，并非教务系统的课程代码。
+5. 点击“刷新课程”；有当前直播时点击“打开直播”。播放器支持平台提供的教师画面、学生画面及纯音频来源。
 
-1. 在 Edge 加载 `dist/edge-extension`。打开扩展弹窗，在 `Course IDs` 中填入课程 ID（逗号或空格分隔），点击 `Save course IDs`，再打开 Pages 的 `/live/` 页面。
-2. 在本机设置 `StuId`、`UISPsw`、`COURSE_IDS` 后运行 `python -m live_player.cli --pages`。
-3. 直接运行本地播放器页面，按界面提示连接助手。
+也可以在浏览器中打开 `chrome-extension://pobnojgocicodoffkgbmefagogfpblbi/popup/index.html` 使用完整标签页入口。该地址仅在本机已安装扩展时有效。扩展加载后可访问 `https://johnxmj.github.io/fudan-icourse-live-player/live/`；公共网站需在改进合并部署后才会更新。
 
-扩展示例课程 ID：
+## 本地播放器
 
-```text
-37142, 37234, 38154, 38463, 38723
+使用 Python 3.10+ 安装 `requirements.txt`，运行：
+
+```sh
+python -m live_player --interactive
 ```
 
-首次使用扩展时，在弹窗点击 `Log in with Fudan CAS`，在新标签页完成官方 CAS 登录。登录成功后回到 Pages 页面刷新即可。扩展只查询并显示当前正在直播的课程，课程没有直播时列表为空是正常现象。
+按提示输入学号、统一身份认证密码和课程 ID；密码不回显、不由启动器写入文件。课程留空会查询最新学期，可能较慢。也可预先设置 `StuId`、`UISPsw`、`COURSE_IDS` 后启动。macOS 优先使用 Chrome，Windows 优先使用 Edge。
 
-公开 Pages 页面不会直接调用 `chrome.runtime`。安装 Edge 扩展后，扩展会在
-`https://johnxmj.github.io/*` 注入受限的 content-script 桥接脚本，Pages 通过
-固定版本和 nonce 的 `window.postMessage` 握手获取当前直播列表。桥接只允许
-能力查询、直播列表和刷新三类请求，不会把 Cookie、Bearer token、签名直播地址
-或媒体源传给网页。
+本地助手仅监听 `127.0.0.1`，自动打开并配对本地页面。正常使用不需手动填写地址或会话令牌。关闭终端或按 Ctrl+C 停止助手。
 
-登录只通过复旦官方 CAS/WebVPN 流程完成。凭证只在本机内存中使用，不写入 Pages；不要把 `.env`、Cookie、签名直播地址或日志提交到仓库。
+原生 ZIP 需解压后保留整个目录。Windows 运行 `Fudan-iCourse-Live.exe`；macOS 双击 `启动本地直播.command`。发布构建脚本会生成可执行程序，首次构建需安装 `requirements-live-build.txt`。源码与扩展也能在本地使用，无需等待新版本发布。
 
-播放器不录制、不下载、不归档视频，也不绕过回放延迟。直播源失效时可刷新课程列表；登录失效时重新完成官方登录；校园网/VPN 不可达时先恢复网络连接。
+## 播放与排错
 
-Edge 扩展卸载：打开 `edge://extensions`，找到 Fudan iCourse Live Player，选择“删除”。本地助手按 Ctrl+C 停止即可。
+| 提示 / 现象 | 处理方式 |
+| --- | --- |
+| 尚未配置课程 | 在扩展中添加课程 ID 或课程链接并保存 |
+| 需要登录 | 在复旦官方登录页完成认证，再刷新课程 |
+| 暂无直播 | 当前配置的课程尚未被学校标记为正在直播，开课后刷新 |
+| 网络 / WebVPN 不可达 | 恢复网络，在官方页面确认能访问该课程后重试 |
+| 等待点击播放 | 浏览器限制自动播放，点击播放器的播放按钮 |
+| 播放中断 | 播放器会有限重试和刷新播放源；仍失败可手动刷新、切换视角或重新登录 |
+| 本地配对已失效 | 重新启动本地助手；一次性配对链接不能重复使用 |
+
+本地媒体授权会随成功播放请求续期，空闲 5 分钟失效，最长持续 6 小时。旧媒体片段地址仍短期失效；课程结束或学校拒绝访问会撤销授权。扩展和本地播放器均不录制、不下载、不归档，也不绕过回放延迟。
+
+GitHub Pages 不提供云端代理，必须连接 Edge 扩展或本地播放器。公开页面通过限定来源、固定版本和 nonce 的消息桥连接扩展；Cookie、账号密码和签名媒体地址留在扩展或本地助手内部。不要提交 `.env`、Cookie、个人日志或签名直播地址。
+
+## 验收与卸载
+
+提交前运行 Python 和全部 Node 测试、扩展构建及资源同步检查。自动检查覆盖持续播放授权、课程发现、页面操作和消息边界；真实播放仍需在本人有权限且正在直播的课程上验收：登录、选课、不同视角、持续播放一节课、断网恢复和课程结束。
+
+卸载扩展：在浏览器扩展管理页选择“移除”。删除下载/解压的播放器目录即可清理本地程序；停止助手后所有内存凭证失效。

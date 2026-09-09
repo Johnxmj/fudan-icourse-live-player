@@ -7,6 +7,9 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const PAGE_ORIGIN = "https://johnxmj.github.io";
 const BRIDGE_SOURCE = "fudan-icourse-live-player";
 const BRIDGE_REQUEST_TYPES = new Set(["CAPABILITIES", "LIST_LIVE", "REFRESH"]);
+// Catalog discovery can involve several sequential course requests over WebVPN.
+// Keep installation detection quick while bounding complete catalog operations.
+const BRIDGE_TIMEOUT_MS = Object.freeze({ CAPABILITIES: 5000, LIST_LIVE: 60000, REFRESH: 60000 });
 const COURSE_KEYS = [
   "course_id", "course_title", "teacher", "room", "sub_id", "sub_title",
   "starts_at", "ends_at", "status", "available_views",
@@ -41,7 +44,7 @@ function safeId(value) {
 }
 
 function responseState(result) {
-  if (result?.state === "login-required" || result?.state === "failed" || result?.state === "empty") {
+  if (result?.state === "login-required" || result?.state === "failed" || result?.state === "empty" || result?.state === "unconfigured") {
     return result.state;
   }
   if (result?.state === "ready") return "connected";
@@ -116,7 +119,7 @@ function createPageBridge(windowRef) {
         const timer = setTimeout(() => {
           pending.delete(requestId);
           timeout(reject, "Pages bridge request timed out");
-        }, 5000);
+        }, BRIDGE_TIMEOUT_MS[type]);
         pending.set(requestId, { resolve, reject, timer });
         post({
           type: "PAGE_BRIDGE_REQUEST",
@@ -180,7 +183,7 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
       if (currentState === "connected" && courses.length === 0) currentState = "empty";
       return courses.map(safeCourse);
     },
-    mountPlayer(container, course = {}, view = "teacher") {
+    mountPlayer(container, course = {}, view = "teacher", { onStatus = () => {} } = {}) {
       if (!container) throw new TypeError("container is required");
       if (!SAFE_VIEWS.has(view)) view = "teacher";
       const documentRef = container.ownerDocument || globalThis.document;
@@ -188,6 +191,7 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
       const frame = documentRef.createElement("iframe");
       frame.src = `${origin}/player/index.html`;
       frame.allow = "autoplay; fullscreen";
+      frame.title = "复旦课程直播播放器";
       if (mounted?.dispose) mounted.dispose();
       const state = {
         frame,
@@ -217,6 +221,11 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
             nonce: state.nonce,
             helloNonce: state.helloNonce,
           });
+          return;
+        }
+        if (data.type === "LIVE_PLAYER_STATE") {
+          if (!state.ready || data.nonce !== state.nonce || data.helloNonce !== state.helloNonce) return;
+          if (["ready", "playing", "buffering", "paused", "failed", "login-required", "ended"].includes(data.state)) onStatus(data.state);
           return;
         }
         if (
@@ -263,7 +272,11 @@ export function createExtensionTransport({ extensionId, runtime, windowRef = glo
     refresh: async () => {
       const result = await send("REFRESH");
       currentState = responseState(result);
-      return result;
+      return {
+        version: PROTOCOL_VERSION,
+        state: currentState === "connected" ? "ready" : currentState,
+        ...(Array.isArray(result?.courses) ? { courses: result.courses.map(safeCourse) } : {}),
+      };
     },
     getState() { return currentState; },
     get state() { return currentState; },

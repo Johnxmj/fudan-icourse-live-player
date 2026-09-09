@@ -206,3 +206,110 @@ test("Pages discovers the extension through the content-script postMessage bridg
     { type: "PAGE_BRIDGE_REQUEST", targetOrigin: "https://johnxmj.github.io" },
   ]);
 });
+
+test("player status requires the actual frame and both completed handshake nonces", () => {
+  const dom = makeDom();
+  const statuses = [];
+  const transport = createExtensionTransport({ extensionId: EXTENSION_ID, runtime: { sendMessage: async () => ({}) }, windowRef: globalThis });
+  const mounted = transport.mountPlayer(dom.container, { course_id: "c1", sub_id: "s1" }, "teacher", { onStatus: value => statuses.push(value) });
+  const event = data => ({ origin: `chrome-extension://${EXTENSION_ID}`, source: dom.frame.contentWindow, data: { version: 1, ...data } });
+  dom.dispatchMessage(event({ type: "LIVE_PLAYER_HELLO", nonce: "hello" }));
+  const state = { type: "LIVE_PLAYER_STATE", state: "playing", nonce: mounted.nonce, helloNonce: "hello" };
+  dom.dispatchMessage(event(state));
+  assert.deepEqual(statuses, [], "status cannot precede ready acknowledgement");
+  dom.dispatchMessage(event({ type: "LIVE_PLAYER_READY", nonce: mounted.nonce, helloNonce: "hello" }));
+  dom.dispatchMessage({ ...event(state), source: {} });
+  dom.dispatchMessage(event({ ...state, nonce: "wrong" }));
+  dom.dispatchMessage(event({ ...state, state: "unknown" }));
+  assert.deepEqual(statuses, []);
+  dom.dispatchMessage(event(state));
+  assert.deepEqual(statuses, ["playing"]);
+  mounted.dispose();
+});
+
+function deferredPageBridge({ handshake = true } = {}) {
+  const listeners = new Set();
+  const requests = [];
+  const windowRef = {
+    addEventListener(_name, handler) { listeners.add(handler); },
+    removeEventListener(_name, handler) { listeners.delete(handler); },
+    postMessage(message) {
+      if (message.type === "PAGE_BRIDGE_HELLO" && handshake) queueMicrotask(() => reply({ type: "PAGE_BRIDGE_READY", nonce: message.nonce }));
+      if (message.type === "PAGE_BRIDGE_REQUEST") requests.push(message);
+    },
+  };
+  const reply = data => {
+    for (const handler of listeners) handler({ source: windowRef, origin: "https://johnxmj.github.io", data: { source: "fudan-icourse-live-player", version: 1, ...data } });
+  };
+  return { windowRef, requests, respond() {
+    const request = requests.at(-1);
+    reply({ type: "PAGE_BRIDGE_RESPONSE", nonce: request.nonce, requestId: request.requestId, ok: true, payload: { version: 1, state: "ready", courses: [] } });
+  } };
+}
+const flushMicrotasks = async () => { for (let index = 0; index < 5; index++) await Promise.resolve(); };
+
+test("Pages allows slow course discovery and refresh beyond the short capability timeout", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const bridge = deferredPageBridge();
+  const transport = createExtensionTransport({ extensionId: EXTENSION_ID, windowRef: bridge.windowRef });
+  for (const method of ["listLive", "refresh"]) {
+    let settled = false;
+    const operation = transport[method]();
+    operation.then(() => { settled = true; }, () => { settled = true; });
+    await flushMicrotasks();
+    context.mock.timers.tick(20000);
+    await flushMicrotasks();
+    assert.equal(settled, false, `${method} must allow a slow VPN course catalog`);
+    bridge.respond();
+    await operation;
+  }
+  transport.dispose();
+});
+
+test("Pages course requests still fail after a bounded one-minute wait", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const bridge = deferredPageBridge();
+  const transport = createExtensionTransport({ extensionId: EXTENSION_ID, windowRef: bridge.windowRef });
+  let settled = false;
+  const request = transport.listLive();
+  request.then(() => { settled = true; }, () => { settled = true; });
+  const rejection = assert.rejects(request, error => error.code === "BRIDGE_TIMEOUT");
+  await flushMicrotasks();
+  context.mock.timers.tick(59999);
+  await flushMicrotasks();
+  assert.equal(settled, false);
+  context.mock.timers.tick(1);
+  await rejection;
+  transport.dispose();
+});
+
+test("Pages keeps helper detection and missing-content-script waits short", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const [handshake, timeout] of [[false, 1500], [true, 5000]]) {
+    const bridge = deferredPageBridge({ handshake });
+    const transport = createExtensionTransport({ extensionId: EXTENSION_ID, windowRef: bridge.windowRef });
+    let settled = false;
+    const probe = transport.probe().then(result => { settled = true; return result; });
+    await flushMicrotasks();
+    context.mock.timers.tick(timeout - 1);
+    await flushMicrotasks();
+    assert.equal(settled, false);
+    context.mock.timers.tick(1);
+    assert.equal(await probe, false);
+    transport.dispose();
+  }
+});
+
+test("refresh returns only public state and sanitized course metadata", async () => {
+  const transport = createExtensionTransport({ extensionId: EXTENSION_ID,
+    runtime: { sendMessage: async () => ({ version: 1, state: "ready", cookie: "private-cookie", courses: [{
+      course_id: "c1", sub_id: "s1", course_title: "Course", media_token: "private-media", signed_url: "https://private.invalid/stream", available_views: ["teacher", "unsafe-view"],
+    }] }) },
+  });
+  const refreshed = await transport.refresh();
+  assert.deepEqual(Object.keys(refreshed).sort(), ["courses", "state", "version"]);
+  assert.equal(refreshed.state, "ready");
+  assert.equal(refreshed.courses[0].course_id, "c1");
+  assert.deepEqual(refreshed.courses[0].available_views, ["teacher"]);
+  assert.doesNotMatch(JSON.stringify(refreshed), /private|media_token|signed_url|cookie|unsafe-view/);
+});

@@ -539,3 +539,7 @@ input:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+.connection-settings { max-width: 560px; color: rgba(11, 23, 54, .68); }
+.connection-settings summary { cursor: pointer; font-size: .85rem; }
+.connection-settings[open] .connect { margin-top: 12px; }

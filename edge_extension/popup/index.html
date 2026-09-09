@@ -1,13 +1,17 @@
 <!doctype html>
-<html>
-  <head><link rel="stylesheet" href="popup.css"></head>
+<html lang="zh-CN">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>复旦课程直播</title><link rel="stylesheet" href="popup.css"></head>
   <body>
-    <h1>Fudan iCourse Live</h1>
-    <label for="course-ids">Course IDs (comma or space separated)</label>
-    <input id="course-ids" type="text" autocomplete="off" placeholder="37142, 37234">
-    <button id="save-course-ids" type="button">Save course IDs</button>
+    <h1>复旦课程直播</h1>
+    <p class="intro">添加课程后，查看当前正在进行的直播。</p>
+    <form id="course-settings">
+      <label for="course-ids">关注的课程</label>
+      <textarea id="course-ids" rows="4" placeholder="粘贴课程 ID 或 iCourse 课程链接，每行一门" aria-describedby="course-help"></textarea>
+      <p id="course-help">支持逗号或换行分隔。只保存课程 ID，不保存链接中的其他信息。</p>
+      <button id="save" type="submit">保存并检查课程</button>
+    </form>
+    <div class="actions"><button id="login" type="button">复旦官方登录</button><button id="refresh" type="button">刷新课程</button></div>
     <ul id="courses" aria-live="polite"></ul>
-    <button id="login" type="button">Log in with Fudan CAS</button>
     <p id="status" role="status" aria-live="polite"></p>
     <script type="module" src="popup.js"></script>
   </body>

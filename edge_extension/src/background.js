@@ -1,4 +1,5 @@
 import { listLiveCourses, resolveLiveSource } from './live-api.js';
+import { readCourseIds, saveCourseIds } from './course-settings.js';
 import {
   parseRequest,
   safeCourse,
@@ -14,7 +15,6 @@ import { WEBVPN_PREFIX } from './webvpn-url.js';
 const ALLOWED_PAGE_ORIGIN = 'https://johnxmj.github.io';
 const CAS_URL = 'https://webvpn.fudan.edu.cn/';
 const API_BASE = `${WEBVPN_PREFIX}/`;
-const COURSE_IDS_KEY = 'courseIds';
 const SAFE_COURSE_ID = /^[A-Za-z0-9]{1,64}$/;
 export const PLAYER_HANDSHAKE = 'PLAYER_HANDSHAKE';
 export const PLAYER_SOURCE = 'PLAYER_SOURCE';
@@ -24,20 +24,11 @@ let loginTabId = null;
 let loginTabSawPrompt = false;
 
 export function parseCourseIds(value) {
+  // Preserve normalization of legacy ID arrays; user input is validated by saveCourseIds.
   const values = Array.isArray(value) ? value : String(value ?? '').split(/[\s,]+/);
   return [...new Set(values
     .map((item) => String(item ?? '').trim())
     .filter((item) => SAFE_COURSE_ID.test(item)))];
-}
-
-async function readStoredCourseIds(storageGet) {
-  if (typeof storageGet !== 'function') return [];
-  try {
-    const result = await storageGet(COURSE_IDS_KEY);
-    return parseCourseIds(result?.[COURSE_IDS_KEY]);
-  } catch (_) {
-    return [];
-  }
 }
 
 /** Handle the small, public API exposed to the approved Pages origin. */
@@ -106,13 +97,21 @@ async function apiGet(path, params) {
   };
 }
 
+function assertApiSuccess(result) {
+  const code = result?.body?.code;
+  if ([302, 401, 403].includes(result?.httpStatus) || [401, 403, '401', '403'].includes(code) || locationRequiresLogin(result?.location)) {
+    throw Object.assign(new Error('login required'), { state: 'login-required' });
+  }
+  if (result?.httpStatus !== 200 || (code != null && ![0, 200, '0', '200'].includes(code))) throw new Error('request failed');
+}
+
 const defaultFetcher = {
   async getSubInfo(courseId, subId) {
     const result = await apiGet(
       'courseapi/v3/portal-home-setting/get-sub-info',
       { course_id: courseId, sub_id: subId },
     );
-    if (result.httpStatus !== 200) throw new Error('request failed');
+    assertApiSuccess(result);
     return result.body.data || {};
   },
   async getCourseDetail(courseId) {
@@ -120,7 +119,7 @@ const defaultFetcher = {
       'courseapi/v3/multi-search/get-course-detail',
       { course_id: courseId },
     );
-    if (result.httpStatus !== 200) throw new Error('request failed');
+    assertApiSuccess(result);
     return result.body.data || result.body;
   },
 };
@@ -139,6 +138,7 @@ export async function probeSession(deps = {}) {
       result?.httpStatus === 302
       || result?.httpStatus === 401
       || result?.httpStatus === 403
+      || [401, 403, '401', '403'].includes(result?.body?.code)
       || locationRequiresLogin(result?.location)
     ) {
       return { state: 'login-required' };
@@ -165,9 +165,8 @@ export async function openCasLogin({ tabsCreate } = {}) {
 export function createBackgroundHandlers(deps = {}) {
   const fetcher = deps.fetcher || defaultFetcher;
   const probe = deps.probe || (() => probeSession(deps));
-  const storageGet = deps.storageGet
-    || globalThis.chrome?.storage?.local?.get?.bind(globalThis.chrome.storage.local);
-  const getCourseIds = deps.getCourseIds || (() => readStoredCourseIds(storageGet));
+  const storage = deps.storage || (typeof deps.storageGet === 'function' ? { get: deps.storageGet } : undefined);
+  const getCourseIds = deps.getCourseIds || (() => readCourseIds(storage));
   let currentSession = { state: 'unknown' };
   let selectedView = 'teacher';
 
@@ -176,7 +175,21 @@ export function createBackgroundHandlers(deps = {}) {
     return currentSession;
   }
 
+  async function listConfiguredCourses() {
+    const ids = await getCourseIds();
+    if (!ids.length) return { state: 'unconfigured', courses: [] };
+    await refreshSession();
+    if (currentSession.state !== 'ready') return { state: currentSession.state, courses: [] };
+    try {
+      const courses = await (deps.listLive || listLiveCourses)(fetcher, ids);
+      return { state: 'ready', courses: courses.map(safeCourse) };
+    } catch (error) {
+      return { state: error?.state === 'login-required' ? 'login-required' : 'failed', courses: [] };
+    }
+  }
+
   return {
+    getSessionState: refreshSession,
     async handle(message) {
       const request = parseRequest(message);
       if (request.type === CAPABILITIES) {
@@ -192,18 +205,10 @@ export function createBackgroundHandlers(deps = {}) {
         };
       }
       if (request.type === REFRESH) {
-        await refreshSession();
-        return { state: currentSession.state };
+        return listConfiguredCourses();
       }
       if (request.type === LIST_LIVE) {
-        await refreshSession();
-        if (currentSession.state !== 'ready') {
-          return { state: currentSession.state, courses: [] };
-        }
-        const courses = await (
-          deps.listLive || listLiveCourses
-        )(fetcher, await getCourseIds());
-        return { state: 'ready', courses: courses.map(safeCourse) };
+        return listConfiguredCourses();
       }
       if (request.type === SET_VIEW) {
         selectedView = request.payload.view;
@@ -230,12 +235,7 @@ export function createBackgroundHandlers(deps = {}) {
     },
 
     async refresh() {
-      await refreshSession();
-      if (currentSession.state !== 'ready') return currentSession;
-      const courses = await (
-        deps.listLive || listLiveCourses
-      )(fetcher, await getCourseIds());
-      return { state: 'ready', courses: courses.map(safeCourse) };
+      return listConfiguredCourses();
     },
   };
 }
@@ -347,14 +347,17 @@ export function installLoginTabWatcher(
         ? () => handlers.refresh()
         : () => handlers.handle({ version: PROTOCOL_VERSION, type: REFRESH, payload: {} })
     );
+    const checkSession = typeof handlers.getSessionState === 'function' ? () => handlers.getSessionState() : refresh;
     Promise.resolve()
-      .then(refresh)
+      .then(checkSession)
       .then((result) => {
         // The WebVPN home is also the pre-login redirect target. Only close it
         // after the authenticated API check confirms a ready session.
         if (isWebVpnHome && result?.state !== 'ready') return;
-        const completedTabId = loginTabId;
+        if (loginTabId !== tabId) return;
+        const completedTabId = tabId;
         loginTabId = null;
+        if (checkSession !== refresh) Promise.resolve().then(refresh).catch(() => {});
         return chromeApi.tabs.remove?.(completedTabId);
       })
       .catch(() => {});
@@ -381,22 +384,17 @@ export function installRuntimeListeners(
     if (!isAllowedSender(sender, false, chromeApi)) return false;
 
     if (message?.type === 'GET_COURSE_IDS') {
-      readStoredCourseIds(chromeApi.storage?.local?.get?.bind(chromeApi.storage.local))
+      readCourseIds(chromeApi.storage?.local)
         .then((courseIds) => sendResponse({ courseIds }))
         .catch(() => sendResponse({ courseIds: [] }));
       return true;
     }
 
     if (message?.type === 'SET_COURSE_IDS') {
-      const courseIds = parseCourseIds(message.courseIds);
-      const set = chromeApi.storage?.local?.set?.bind(chromeApi.storage.local);
-      if (typeof set !== 'function') {
-        sendResponse({ ok: false, error: 'storage unavailable' });
-        return false;
-      }
-      Promise.resolve(set({ [COURSE_IDS_KEY]: courseIds }))
-        .then(() => sendResponse({ ok: true, courseIds }))
-        .catch(() => sendResponse({ ok: false, error: 'storage unavailable' }));
+      const input = Array.isArray(message.courseIds) ? parseCourseIds(message.courseIds).join('\n') : message.courseIds;
+      saveCourseIds(input, chromeApi.storage?.local)
+        .then((courseIds) => sendResponse({ ok: true, courseIds }))
+        .catch((error) => sendResponse({ ok: false, error: error instanceof TypeError ? 'invalid course IDs' : 'storage unavailable' }));
       return true;
     }
 
@@ -432,7 +430,7 @@ export function installRuntimeListeners(
       }
       handlers.source(payload.courseId, payload.subId, payload.view)
         .then((source) => sendResponse({ ok: true, source }))
-        .catch(() => sendResponse({ ok: false, error: 'live source unavailable' }));
+        .catch((error) => sendResponse({ ok: false, error: 'live source unavailable', state: ['login-required', 'ended'].includes(error?.state) ? error.state : 'failed' }));
       return true;
     }
 

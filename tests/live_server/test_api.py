@@ -89,13 +89,14 @@ class LiveApiTest(unittest.TestCase):
         self.assertEqual(self.app.handle("GET", "/api/live-courses?token=" + token, {}, b"").status, 401)
         self.assertEqual(self.app.handle("GET", "/api/live-courses", {"Authorization": "Bearer wrong"}, b"").status, 401)
 
-    def test_empty_catalog_has_stable_error(self):
+    def test_empty_catalog_is_a_successful_empty_list(self):
         class Empty(Client):
             def get_course_detail(self, course_id):
                 return {"lectures": []}
         self.app = LiveApplication(SessionManager(Empty), course_ids=["c1"])
         response = self.app.handle("GET", "/api/live-courses", self.authorize(), b"")
-        self.assertEqual(json.loads(response.body)["error"]["code"], "NO_LIVE_COURSES")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.body), [])
 
     def test_upstream_errors_are_not_exposed(self):
         class Broken(Client):

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readCourseIds, saveCourseIds } from '../../edge_extension/src/course-settings.js';
 
 import {
   probeSession,
@@ -544,5 +545,97 @@ test('popup exposes a user-triggered CAS login action', async () => {
   assert.match(script, /OPEN_CAS_LOGIN/);
   assert.match(script, /addEventListener\(["']click["']/);
   assert.match(html, /id=["']course-ids["']/);
-  assert.match(script, /SET_COURSE_IDS/);
+  assert.match(script, /saveCourseIds/);
+});
+
+test('production handlers read saved courses and refresh changes without a restart', async () => {
+  let ids = ['course1'];
+  const visited = [];
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storage: { async get() { return { courseIds: ids }; } },
+    listLive: async (_fetcher, configured) => { visited.push([...configured]); return []; },
+  });
+  await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} });
+  ids = ['course2'];
+  await handlers.refresh();
+  assert.deepEqual(visited, [['course1'], ['course2']]);
+});
+
+test('missing course configuration differs from a configured course with no live lecture', async () => {
+  const handlers = createBackgroundHandlers({
+    probe: async () => ({ state: 'ready' }),
+    storage: { async get() { return {}; } },
+  });
+  assert.deepEqual(await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} }), { state: 'unconfigured', courses: [] });
+  assert.equal((await handlers.refresh()).state, 'unconfigured');
+  assert.equal((await handlers.handle({ version: 1, type: 'REFRESH', payload: {} })).state, 'unconfigured');
+});
+
+test('an expired session during a course API call remains login-required', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async input => ({ status: 200, url: String(input), json: async () => ({ code: 401, msg: 'private upstream detail' }) });
+  try {
+    const handlers = createBackgroundHandlers({ probe: async () => ({ state: 'ready' }), getCourseIds: async () => ['123'] });
+    assert.deepEqual(await handlers.handle({ version: 1, type: 'LIST_LIVE', payload: {} }), { state: 'login-required', courses: [] });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('an expired session returned as JSON is recognized before catalog lookup', async () => {
+  assert.deepEqual(await probeSession({ fetchJson: async () => ({ httpStatus: 200, body: { code: 401 } }) }), { state: 'login-required' });
+});
+
+test('player source failures return only a safe actionable state', async () => {
+  const listeners = [];
+  installRuntimeListeners({ runtime: { id: 'extension-id', onMessage: { addListener(fn) { listeners.push(fn); } } }, tabs: {} }, {
+    source: async () => { throw Object.assign(new Error('https://private.invalid/secret'), { state: 'login-required' }); },
+  });
+  let result;
+  listeners[0]({ type: 'PLAYER_SOURCE', payload: { courseId: 'c1', subId: 's1', view: 'teacher' } }, { id: 'extension-id' }, value => { result = value; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(result, { ok: false, error: 'live source unavailable', state: 'login-required' });
+});
+
+test('legacy settings messages and the URL-aware popup share one courseIds store', async () => {
+  let saved = {};
+  const storage = { async get() { return saved; }, async set(value) { saved = value; } };
+  const listeners = [];
+  const chromeApi = { runtime: { id: 'extension-id', onMessage: { addListener(fn) { listeners.push(fn); } } }, storage: { local: storage }, tabs: {} };
+  installRuntimeListeners(chromeApi, createBackgroundHandlers({ storage, probe: async () => ({ state: 'ready' }) }));
+  const send = message => new Promise(resolve => listeners[0](message, { id: 'extension-id' }, resolve));
+  await saveCourseIds('https://icourse.fudan.edu.cn/?course_id=123', storage);
+  assert.deepEqual(await send({ type: 'GET_COURSE_IDS' }), { courseIds: ['123'] });
+  assert.deepEqual(await send({ type: 'SET_COURSE_IDS', courseIds: 'https://icourse.fudan.edu.cn/?course_id=456' }), { ok: true, courseIds: ['456'] });
+  assert.deepEqual(await readCourseIds(storage), ['456']);
+  const invalid = await send({ type: 'SET_COURSE_IDS', courseIds: 'invalid!' });
+  assert.equal(invalid.ok, false);
+  assert.deepEqual(await readCourseIds(storage), ['456']);
+});
+
+test('a confirmed login can finish before any course has been configured', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 76 }) });
+  const listeners = [];
+  const removed = [];
+  installLoginTabWatcher({ tabs: { onUpdated: { addListener(fn) { listeners.push(fn); } }, remove: async id => removed.push(id) } },
+    createBackgroundHandlers({ probe: async () => ({ state: 'ready' }), getCourseIds: async () => [] }));
+  listeners[0](76, { url: 'https://webvpn.fudan.edu.cn/login' });
+  listeners[0](76, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(removed, [76]);
+});
+
+test('a delayed login check cannot close a newer login tab', async () => {
+  await openCasLogin({ tabsCreate: async () => ({ id: 77 }) });
+  const listeners = [];
+  const removed = [];
+  let confirm;
+  installLoginTabWatcher({ tabs: { onUpdated: { addListener(fn) { listeners.push(fn); } }, remove: async id => removed.push(id) } },
+    { refresh: () => new Promise(resolve => { confirm = resolve; }) });
+  listeners[0](77, { url: 'https://webvpn.fudan.edu.cn/login' });
+  listeners[0](77, { url: 'https://webvpn.fudan.edu.cn/' });
+  await new Promise(resolve => setImmediate(resolve));
+  await openCasLogin({ tabsCreate: async () => ({ id: 78 }) });
+  confirm({ state: 'ready' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(removed, []);
 });

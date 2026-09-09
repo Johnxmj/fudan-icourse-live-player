@@ -1,5 +1,3 @@
-const PAGES_ORIGIN = "https://johnxmj.github.io";
-
 export function parseBridge(location) {
   try {
     const hash = typeof location?.hash === "string" ? location.hash : "";
@@ -66,7 +64,23 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
     } catch (error) { state = error?.status === 401 ? "login-required" : "disconnected"; throw error; }
     finally { bootstrap = null; }
   })();
-  const json = async (path) => { await connect; const payload = await (await request(path)).json(); return payload; };
+  // A higher priority extension may be selected before this asynchronous pairing finishes.
+  connect.catch(() => {});
+  const json = async (path) => {
+    await connect;
+    try {
+      const payload = await (await request(path)).json();
+      state = "ready";
+      return payload;
+    } catch (error) {
+      if (path === "/api/live-courses" && error.status === 404 && error.code === "NO_LIVE_COURSES") {
+        state = "empty";
+        return [];
+      }
+      state = error.status === 401 || error.status === 403 ? "login-required" : "failed";
+      throw error;
+    }
+  };
   return {
     name: "local", baseUrl, ready: connect,
     probe: async () => { try { await connect; return true; } catch { return false; } },

@@ -14,25 +14,42 @@ jobs:
         with: {python-version: '3.12'}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
+      - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
       - run: node --test tests/live_web/*.test.mjs tests/extension/*.test.mjs tests/pages_live/*.test.mjs
       - run: node scripts/sync_live_web.mjs --check
   package:
     needs: test
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python scripts/build_windows.py --audit-only
+      - run: python -m pip install -r requirements.txt -r requirements-live-build.txt
+      - run: python scripts/build_windows.py
         name: Build Windows player
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - run: node edge_extension/scripts/build.mjs
         name: Package Edge extension
-      - shell: pwsh
-        run: Get-FileHash dist\fudan-icourse-live-edge.zip -Algorithm SHA256 | Out-File dist\SHA256SUMS.txt
+      - shell: bash
+        run: python scripts/checksums.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-player-${{ matrix.os }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS-*.txt
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/*
+          files: |
+            dist/fudan-icourse-live-${{ runner.os == 'Windows' && 'windows' || 'darwin' }}-*.zip
+            dist/SHA256SUMS-*.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+        with:
+          files: dist/fudan-icourse-live-edge.zip

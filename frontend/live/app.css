@@ -30,3 +30,35 @@ button:focus-visible { outline: 3px solid var(--paper); outline-offset: 3px; }
   .state-card { padding: 28px; }
   .rail-toggle { display: inline-flex; position: absolute; z-index: 3; top: 16px; left: 16px; }
 }
+[hidden] { display: none !important; }
+a { color: var(--muted); }
+.brand-label { letter-spacing: .12em; font-size: .72rem; }
+.course-rail { display: flex; flex-direction: column; gap: 12px; }
+.course-rail h1, .course-rail p { margin: 0; }
+.course-list { display: grid; gap: 12px; margin-top: 12px; }
+.course-card { display: grid; gap: 8px; width: 100%; padding: 18px; text-align: left; color: var(--paper); background: #16264a; border-radius: 12px; border: 1px solid transparent; overflow-wrap: anywhere; }
+.course-card span, .course-card small { color: var(--muted); font-weight: 400; }
+.course-card[aria-pressed="true"] { border-color: var(--live); background: #163c3c; }
+.help-link { margin-top: 24px; font-size: .85rem; }
+.player-surface { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 20px; min-width: 0; }
+.player-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.player-heading h2 { margin: 0; font-size: 1.35rem; }
+.player-heading p { color: var(--muted); }
+.player-heading button { background: #23375d; color: var(--paper); flex: none; }
+[data-live-state] { display: grid; place-items: center; }
+.player-host { aspect-ratio: 16 / 9; width: 100%; background: #030812; border-radius: 16px; overflow: hidden; }
+.player-host > video, .player-host > iframe { display: block; width: 100%; height: 100%; border: 0; }
+[data-playing="true"] .state-card { width: 100%; padding: 14px 18px; border-radius: 12px; box-shadow: none; }
+[data-playing="true"] .state-kicker { display: none; }
+[data-playing="true"] .state-card h2 { font-size: 1rem; margin-bottom: 4px; }
+[data-playing="true"] .state-card > p { font-size: .85rem; margin: 0; }
+.view-bar { display: flex; gap: 10px; flex-wrap: wrap; }
+.view-bar button { background: #23375d; color: var(--paper); }
+.view-bar button[aria-pressed="true"] { background: var(--live); color: var(--ink); }
+button:disabled { opacity: .5; cursor: wait; }
+@media (max-width: 759px) {
+  .course-rail { padding-top: 80px; overflow-y: auto; }
+  .player-surface { padding-top: 80px; justify-content: flex-start; }
+  .player-heading h2 { font-size: 1.1rem; }
+}
+@media (prefers-reduced-motion: reduce) { .course-rail { transition: none; } }

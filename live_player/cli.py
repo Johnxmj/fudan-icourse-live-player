@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -63,6 +64,11 @@ def build_application(env=None) -> LauncherConfig:
 
 
 def open_edge(url):
+    if sys.platform == "darwin":
+        for browser in ("Google Chrome", "Microsoft Edge"):
+            if (Path("/Applications") / f"{browser}.app").is_dir():
+                subprocess.Popen(["open", "-a", browser, url])
+                return
     candidates = [
         Path(os.environ.get("ProgramFiles(x86)", "")) / "Microsoft/Edge/Application/msedge.exe",
         Path(os.environ.get("ProgramFiles", "")) / "Microsoft/Edge/Application/msedge.exe",
@@ -82,7 +88,7 @@ def launch_player(config: LauncherConfig, *, pages=False):
         bridge = quote(f"http://{host}:{port}", safe="")
         url = f"https://johnxmj.github.io/fudan-icourse-live-player/live/#bridge={bridge}&bootstrap={quote(config.bootstrap_token, safe='')}"
     else:
-        url = f"http://{host}:{port}/?bootstrap={config.bootstrap_token}"
+        url = f"http://{host}:{port}/#bootstrap={config.bootstrap_token}"
     started = False
     try:
         open_edge(url)
@@ -101,6 +107,18 @@ def launch_player(config: LauncherConfig, *, pages=False):
                 server.server_close()
 
 
+def prompt_environment(env, *, input_fn=input, password_fn=getpass.getpass):
+    """Collect missing local settings without saving credentials to disk."""
+    values = dict(env)
+    if not _env_value(values, "StuId"):
+        values["StuId"] = input_fn("复旦学号：").strip()
+    if not _env_value(values, "UISPsw"):
+        values["UISPsw"] = password_fn("统一身份认证密码（输入不显示，仅本次使用）：")
+    if not _env_value(values, "COURSE_IDS"):
+        values["COURSE_IDS"] = input_fn("课程 ID（多个用逗号分隔；留空查询最新学期，可能较慢）：").strip()
+    return values
+
+
 def main(argv=None, env=None) -> int:
     parser = argparse.ArgumentParser(
         prog="live_player",
@@ -110,8 +128,20 @@ def main(argv=None, env=None) -> int:
         ),
     )
     parser.add_argument("--pages", action="store_true", help="open the GitHub Pages live shell with a fragment pairing")
+    parser.add_argument("--interactive", action="store_true", help="按提示输入学号、密码和课程，无需配置环境变量")
     args = parser.parse_args(argv)
-    launch_player(build_application(env), pages=args.pages)
+    values = os.environ if env is None else env
+    try:
+        if args.interactive:
+            values = prompt_environment(values)
+        config = build_application(values)
+    except (ValueError, EOFError):
+        print("尚未配置登录信息。请使用 --interactive 按提示启动，或设置 StuId / UISPsw。", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+    print("播放器将在浏览器中打开。关闭此窗口或按 Ctrl+C 可停止本地助手。")
+    launch_player(config, pages=args.pages)
     return 0
 
 

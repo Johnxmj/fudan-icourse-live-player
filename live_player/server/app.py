@@ -1,12 +1,13 @@
 """Small transport-independent routing layer; no raw upstream errors escape."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hmac
 import json
 import secrets
 import threading
 import time
 import ipaddress
+import math
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -20,6 +21,8 @@ from .tokens import TokenStore
 _MANIFEST_CONTENT_TYPE = "application/vnd.apple.mpegurl"
 _SEGMENT_CHUNK_SIZE = 64 * 1024
 _SEGMENT_TTL_SECONDS = 90
+_MEDIA_IDLE_SECONDS = 5 * 60
+_MEDIA_MAX_SECONDS = 6 * 60 * 60
 _WEBVPN_HOST = urlsplit(WEBVPN_BASE).hostname or "webvpn.fudan.edu.cn"
 _STATIC_ROOT = Path(__file__).resolve().parents[1] / "web"
 _STATIC_ASSETS = {
@@ -64,6 +67,8 @@ class _MediaTokenEntry:
     course_id: str
     sub_id: str
     expires_at: float
+    idle_seconds: float
+    absolute_expires_at: float
 
 
 class _MediaRouteStore:
@@ -76,7 +81,7 @@ class _MediaRouteStore:
         self._lock = threading.RLock()
 
     def register(self, source_key, course_id, sub_id, view, url, ttl_seconds=_SEGMENT_TTL_SECONDS):
-        if ttl_seconds <= 0:
+        if not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
             raise ValueError("route lifetime must be positive")
         with self._lock:
             now = self._clock()
@@ -94,6 +99,15 @@ class _MediaRouteStore:
             now = self._clock()
             self._prune_locked(now)
             return self._entries.get(token)
+
+    def renew_playlist(self, token):
+        """Keep an actively polled child playlist usable; segments stay short lived."""
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            entry = self._entries.get(token)
+            if entry is not None:
+                self._entries[token] = replace(entry, expires_at=now + _SEGMENT_TTL_SECONDS)
 
     def invalidate_source(self, source_key):
         with self._lock:
@@ -120,15 +134,18 @@ class _MediaRouteStore:
 
 
 class _MediaTokenStore:
+    """Course-scoped access with an idle timeout and a fixed maximum lifetime."""
     def __init__(self, clock=None):
         self._clock = clock or (lambda: time.monotonic())
         self._entries: dict[str, _MediaTokenEntry] = {}
         self._sources: dict[tuple[str, str], set[str]] = {}
         self._lock = threading.RLock()
 
-    def issue(self, course_id, sub_id, ttl_seconds=_SEGMENT_TTL_SECONDS):
-        if ttl_seconds <= 0:
+    def issue(self, course_id, sub_id, ttl_seconds=_MEDIA_IDLE_SECONDS, max_lifetime_seconds=_MEDIA_MAX_SECONDS):
+        if not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
             raise ValueError("token lifetime must be positive")
+        if not math.isfinite(max_lifetime_seconds) or max_lifetime_seconds <= 0:
+            raise ValueError("maximum token lifetime must be positive")
         source_key = (str(course_id), str(sub_id))
         with self._lock:
             now = self._clock()
@@ -136,7 +153,11 @@ class _MediaTokenStore:
             token = secrets.token_urlsafe(24)
             while token in self._entries:
                 token = secrets.token_urlsafe(24)
-            entry = _MediaTokenEntry(source_key, str(course_id), str(sub_id), now + ttl_seconds)
+            absolute_expires_at = now + max_lifetime_seconds
+            entry = _MediaTokenEntry(
+                source_key, str(course_id), str(sub_id),
+                min(now + ttl_seconds, absolute_expires_at), ttl_seconds, absolute_expires_at,
+            )
             self._entries[token] = entry
             self._sources.setdefault(source_key, set()).add(token)
             return token
@@ -146,6 +167,17 @@ class _MediaTokenStore:
             now = self._clock()
             self._prune_locked(now)
             return self._entries.get(token)
+
+    def renew(self, token):
+        """Renew only after a successful request; expired entries cannot revive."""
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            entry = self._entries.get(token)
+            if entry is not None:
+                self._entries[token] = replace(
+                    entry, expires_at=min(now + entry.idle_seconds, entry.absolute_expires_at),
+                )
 
     def invalidate_source(self, source_key):
         with self._lock:
@@ -263,8 +295,6 @@ class LiveApplication:
                     return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
                 courses = self.session_manager.call(lambda client: discover_live_courses(
                     client, resolve_course_ids(client, self.course_ids, self.term)))
-                if not courses:
-                    return _error(404, "NO_LIVE_COURSES", "No courses are live now")
                 payload = []
                 for course in courses:
                     item = asdict(course)
@@ -323,13 +353,19 @@ class LiveApplication:
                 return _error(410, "SOURCE_EXPIRED", "Source expired")
             if media_entry.course_id != entry.course_id or media_entry.sub_id != entry.sub_id:
                 return _error(401, "LOGIN_REQUIRED", "Media authorization required")
-            return self._serve_segment(token, media_token, media_entry)
+            response = self._serve_segment(token, media_token, media_entry)
+            if response.status == 200:
+                self._media_tokens.renew(media_token)
+            return response
         parts = route.split("/")
         if len(parts) == 6 and parts[1] == "media" and parts[5] == "manifest.m3u8":
             course_id, sub_id, view = parts[2], parts[3], parts[4]
             if media_entry.course_id != str(course_id) or media_entry.sub_id != str(sub_id):
                 return _error(401, "LOGIN_REQUIRED", "Media authorization required")
-            return self._serve_manifest(course_id, sub_id, view, media_token)
+            response = self._serve_manifest(course_id, sub_id, view, media_token)
+            if response.status == 200:
+                self._media_tokens.renew(media_token)
+            return response
         return _error(404, "VIEW_UNAVAILABLE", "Requested view is unavailable")
 
     def _get_live_client(self):
@@ -412,8 +448,9 @@ class LiveApplication:
         close = getattr(upstream, "close", None)
         if close is not None:
             close()
-        if status in (401, 403):
+        if getattr(upstream, "status_code", None) in (401, 403):
             self._media_routes.invalidate_source(source_key)
+            self._media_tokens.invalidate_source(source_key[:2])
             self.session_manager.invalidate()
             return _error(410, "SOURCE_EXPIRED", "Source expired")
         return _error(status, code, message)
@@ -428,6 +465,7 @@ class LiveApplication:
             return _error(502, "UPSTREAM_FAILED", "Live source validation failed")
         except RuntimeError as exc:
             if "not currently live" in str(exc):
+                self._media_tokens.invalidate_source((str(course_id), str(sub_id)))
                 return _error(410, "SOURCE_EXPIRED", "Source expired")
             return _error(502, "UPSTREAM_FAILED", "Live source unavailable")
 
@@ -474,6 +512,7 @@ class LiveApplication:
         except RuntimeError as exc:
             if "not currently live" in str(exc):
                 self._media_routes.invalidate_source(entry.source_key)
+                self._media_tokens.invalidate_source((entry.course_id, entry.sub_id))
                 return _error(410, "SOURCE_EXPIRED", "Source expired")
             return _error(502, "UPSTREAM_FAILED", "Live source unavailable")
 
@@ -490,6 +529,7 @@ class LiveApplication:
             status = getattr(upstream, "status_code", None)
             if status in (401, 403):
                 self._media_routes.invalidate_source(entry.source_key)
+                self._media_tokens.invalidate_source((entry.course_id, entry.sub_id))
                 self.session_manager.invalidate()
                 return _error(410, "SOURCE_EXPIRED", "Source expired")
             if status != 200:
@@ -530,6 +570,7 @@ class LiveApplication:
                 rewritten = rewrite_hls_manifest(manifest_text, register, manifest_source)
                 rewritten = self._scrub_manifest_metadata(rewritten, manifest_host.lower())
                 self._reject_unsafe_manifest(rewritten, manifest_host.lower())
+                self._media_routes.renew_playlist(token)
                 return Response(200, {"Content-Type": _MANIFEST_CONTENT_TYPE, "Cache-Control": "no-store"}, rewritten.encode("utf-8"))
 
             headers_out = {"Cache-Control": "no-store"}

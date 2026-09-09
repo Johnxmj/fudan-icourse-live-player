@@ -88,3 +88,15 @@ test("content script ignores wrong origins, nonces, and non-whitelisted requests
   assert.deepEqual(bridge.calls, []);
   assert.equal(bridge.sent.length, 1);
 });
+
+test('content bridge preserves the unconfigured state without widening its API', async () => {
+  const bridge = makeBridge();
+  bridge.page.chrome.runtime.sendMessage = async () => ({ state: 'unconfigured', courses: [] });
+  bridge.page.dispatch({ source: 'fudan-icourse-live-player', version: 1, type: 'PAGE_BRIDGE_HELLO', nonce: 'config-nonce' });
+  bridge.page.dispatch({
+    source: 'fudan-icourse-live-player', version: 1, type: 'PAGE_BRIDGE_REQUEST', nonce: 'config-nonce',
+    requestId: 'config-request', request: { version: 1, type: 'LIST_LIVE', payload: {} },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(bridge.sent.at(-1).message.payload.state, 'unconfigured');
+});

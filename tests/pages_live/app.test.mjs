@@ -27,8 +27,8 @@ test("returns disconnected when no helper is available", async () => {
 
 test("disconnected state offers exactly extension and local-player actions", () => {
   const markup = renderState("disconnected");
-  assert.match(markup, /Edge extension/i);
-  assert.match(markup, /Windows local player/i);
+  assert.match(markup, /浏览器扩展/);
+  assert.match(markup, /本地播放器/);
   assert.equal((markup.match(/<button\b/g) || []).length, 2);
   assert.match(markup, /data-action-url="https:\/\/github\.com\/Johnxmj\/fudan-icourse-live-player/);
   assert.doesNotMatch(markup, /password|cookie|signed url/i);
@@ -53,8 +53,8 @@ test("disconnected actions open safe setup guidance", () => {
   buttons[1].listeners.click();
 
   assert.deepEqual(opened.map((entry) => entry.url), [
-    "https://github.com/Johnxmj/fudan-icourse-live-player#edge-current-live-extension-developer-mode",
-    "https://github.com/Johnxmj/fudan-icourse-live-player#本地直播预览",
+    "https://github.com/Johnxmj/fudan-icourse-live-player/blob/main/docs/live-player.md",
+    "https://github.com/Johnxmj/fudan-icourse-live-player#run-locally",
   ]);
   assert.deepEqual(opened.map((entry) => entry.target), ["_blank", "_blank"]);
   assert.ok(opened.every((entry) => /noopener/.test(entry.features)));
