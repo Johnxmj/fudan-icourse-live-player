@@ -1,7 +1,8 @@
 # Fudan iCourse Live Player
 
-Standalone current-live player for Fudan iCourse. This is a separate project;
-it does not contain the encrypted-summary subscriber, email delivery, database,
+Standalone Fudan iCourse current-live player with a Microsoft Edge extension,
+GitHub Pages shell, and loopback bridge. This is a separate project; it does
+not contain the encrypted-summary subscriber, email delivery, database,
 recording, download, or pre-release playback features.
 
 ## Components
