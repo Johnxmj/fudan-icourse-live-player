@@ -17,9 +17,10 @@ class LiveReleaseWorkflowTest(unittest.TestCase):
         self.assertFalse(is_allowed_artifact_input(Path("models--Systran--faster-whisper-base/blob")))
         self.assertTrue(is_allowed_artifact_input(Path("live_player/web/index.html")))
 
-    def test_release_workflow_audits_archive_listings_after_each_native_build(self):
+    def test_release_workflow_uses_the_python_archive_audit_after_each_native_build(self):
         text = (ROOT / ".github/workflows/release-live-player.yml").read_text(encoding="utf-8")
         self.assertIn("--audit-only", text)
-        self.assertIn("unzip -Z1", text)
-        self.assertIn("models--", text.lower())
+        self.assertIn("--audit-archives-in dist", text)
+        self.assertNotIn("unzip -Z1", text)
+        self.assertNotIn("Reject private or model data in native ZIP", text)
         self.assertIn("live-v*", text)

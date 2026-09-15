@@ -60,6 +60,25 @@ class LiveApiTest(unittest.TestCase):
     def test_rejects_course_list_without_session_token(self):
         self.assertEqual(self.app.handle("GET", "/api/live-courses", {}, b"").status, 401)
 
+    def test_public_static_module_graph_serves_transcription_without_a_bearer(self):
+        page = self.app.handle("GET", "/", {}, b"")
+        app = self.app.handle("GET", "/app.js", {}, b"")
+        transport = self.app.handle("GET", "/transport-local.js", {}, b"")
+        module = self.app.handle("GET", "/transcription.js", {}, b"")
+        module_head = self.app.handle("HEAD", "/transcription.js", {}, b"")
+
+        self.assertEqual(page.status, 200)
+        self.assertIn(b'app.js', page.body)
+        self.assertEqual(app.status, 200)
+        self.assertIn(b'./transcription.js', app.body)
+        self.assertEqual(transport.status, 200)
+        self.assertIn(b'./transcription.js', transport.body)
+        for response in (module, module_head):
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "application/javascript; charset=utf-8")
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertIn(b"createTranscriptionController", module.body)
+
     def test_returns_only_safe_course_fields(self):
         headers = self.authorize()
         for _ in range(2):

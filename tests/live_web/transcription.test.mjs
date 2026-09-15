@@ -53,7 +53,7 @@ test("SSE parsing accepts only safe event records across arbitrary chunk boundar
   const events = [];
   await parseSseStream(streamFromChunks([
     "event: transcript\ndata: {\"type\":\"seg",
-    "ment\",\"start\":62,\"end\":64.5,\"text\":\"请 签到\",\"private\":\"nope\"}\n\n",
+    "ment\",\"start\":62,\"end\":64.5,\"text\":\"请 签到\",\"receivedAt\":\"remote-controlled\",\"private\":\"nope\"}\n\n",
     "event: transcript\ndata: {\"type\":\"error\",\"code\":\"AUDIO_UNAVAILABLE\",\"message\":\"Audio unavailable\",\"stack\":\"secret\"}\n\n",
     "event: transcript\ndata: {\"type\":\"ended\",\"state\":\"<img src=x onerror=alert(1)>\"}\n\n",
     "event: unknown\ndata: {\"type\":\"segment\",\"text\":\"ignore\"}\n\n",
@@ -65,13 +65,13 @@ test("SSE parsing accepts only safe event records across arbitrary chunk boundar
   ]);
 });
 
-test("markdown contains escaped alerts and timestamps but no connection data", () => {
+test("markdown contains escaped alerts, receipt times, and marked keywords but no connection data", () => {
   const markdown = buildTranscriptMarkdown({
     course: { course_id: "37142", sub_id: "659200", name: "课程 | 名称" },
     sessionId: "tx-1",
     settings: { model: "base", language: "zh" },
-    alerts: [{ keyword: "签到|quiz", timestamp: 62, text: "请 | 签到" }],
-    transcript: [{ start: 62, end: 64, text: "请 | 签到" }],
+    alerts: [{ keyword: "签到|quiz", timestamp: 62, receivedAt: "2026-09-15T01:02:03.000Z", text: "请 | 签到" }],
+    transcript: [{ start: 62, end: 64, text: "请 | 签到", keywords: ["签到|quiz"] }],
     exportedAt: new Date("2026-09-15T00:00:00Z"),
     media_token: "must-not-export",
     bootstrap: "must-not-export",
@@ -80,6 +80,8 @@ test("markdown contains escaped alerts and timestamps but no connection data", (
 
   assert.match(markdown, /## 告警记录/);
   assert.match(markdown, /\[00:01:02\]/);
+  assert.match(markdown, /2026-09-15T01:02:03\.000Z/);
+  assert.match(markdown, /\*\*关键词：签到\\\|quiz\*\*/);
   assert.match(markdown, /课程 \\| 名称/);
   assert.match(markdown, /请 \\| 签到/);
   assert.doesNotMatch(markdown, /media_token|bootstrap|127\.0\.0\.1/);
@@ -103,7 +105,7 @@ test("controller persists only settings while keeping immutable transcript snaps
     },
     stopTranscription: async () => ({}),
   };
-  const controller = createTranscriptionController({ transport, storage, now: () => 0 });
+  const controller = createTranscriptionController({ transport, storage, now: () => Date.parse("2026-09-15T01:02:03.000Z") });
   controller.updateSettings({ keywords: ["签到", " 签 到 "] });
   await controller.start({ course_id: "37142", sub_id: "659200", name: "课程" });
   await controller.waitForStream();
@@ -113,7 +115,8 @@ test("controller persists only settings while keeping immutable transcript snaps
     model: "base", language: "zh", keywords: ["签到"], pageAlert: true, soundAlert: true, systemAlert: true,
   }]]);
   assert.equal(snapshot.transcript[0].text, "现在请签到");
-  assert.deepEqual(snapshot.alerts, [{ keyword: "签到", timestamp: 62, text: "现在请签到" }]);
+  assert.deepEqual(snapshot.alerts, [{ keyword: "签到", timestamp: 62, receivedAt: "2026-09-15T01:02:03.000Z", text: "现在请签到" }]);
+  assert.throws(() => { snapshot.alerts[0].receivedAt = "mutated"; }, TypeError);
   assert.throws(() => snapshot.transcript.push({}), TypeError);
   assert.throws(() => { snapshot.transcript[0].text = "mutated"; }, TypeError);
 });

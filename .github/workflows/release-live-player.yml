@@ -33,16 +33,8 @@ jobs:
         name: Build Windows player
       - run: python scripts/build_windows.py --audit-only
         name: Audit native build inputs
-      - shell: bash
-        name: Reject private or model data in native ZIP
-        run: |
-          set -euo pipefail
-          archive="$(find dist -maxdepth 1 -name 'fudan-icourse-live-*.zip' -print -quit)"
-          test -n "$archive"
-          if unzip -Z1 "$archive" | grep -Eiq '(^|/)(models--[^/]*|huggingface|whisper-cache|transcript|transcripts|audio)(/|$)|(^|/)[^/]*\.(bin|wav|mp3|pcm|m4a|aac|flac|ogg)$|(^|/)\.env($|/)|(^|/)[^/]*(cookie|credential)[^/]*$'; then
-            echo "Native ZIP contains denied model, private, transcript, or audio data."
-            exit 1
-          fi
+      - run: python scripts/build_windows.py --audit-archives-in dist
+        name: Audit native build archive
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - run: node edge_extension/scripts/build.mjs

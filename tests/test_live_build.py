@@ -72,6 +72,27 @@ class NativeBuildTest(unittest.TestCase):
             ],
         )
 
+    def test_archive_audit_allows_approved_pyav_audio_but_rejects_arbitrary_audio_and_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "native.zip"
+            import zipfile
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("Fudan/_internal/av/audio/runtime.py", "runtime")
+                package.writestr("Fudan/_internal/av/audio/user/data/notes.txt", "user data")
+                package.writestr("Fudan/_internal/other/audio/runtime.py", "user data")
+                package.writestr("Fudan/_internal/other/data/runtime.py", "user data")
+
+            denied = build_windows.audit_archive(archive)
+
+        self.assertEqual(
+            denied,
+            [
+                "Fudan/_internal/av/audio/user/data/notes.txt",
+                "Fudan/_internal/other/audio/runtime.py",
+                "Fudan/_internal/other/data/runtime.py",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

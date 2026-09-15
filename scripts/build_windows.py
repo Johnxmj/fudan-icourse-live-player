@@ -78,6 +78,14 @@ def audit_archive(archive: Path) -> list[str]:
     return denied
 
 
+def audit_archives_in(directory: Path) -> list[str]:
+    """Audit every generated native ZIP in a release directory."""
+    archives = sorted(directory.glob("fudan-icourse-live-*.zip"))
+    if not archives:
+        return ["No native player archive found"]
+    return [f"{archive.name}:{name}" for archive in archives for name in audit_archive(archive)]
+
+
 def _is_runtime_component(parts: list[str], index: int) -> bool:
     """Allow only the component named by an explicit packaged-runtime prefix."""
     return any(
@@ -116,12 +124,20 @@ def build(output: Path) -> Path:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument("--audit-archives-in", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args(argv)
     bad = audit_inputs()
     if bad:
         print("Denied artifact inputs:", ", ".join(map(str, bad)))
         return 1
+    if args.audit_archives_in is not None:
+        denied = audit_archives_in(args.audit_archives_in)
+        if denied:
+            print("Denied artifact archive paths:", ", ".join(denied))
+            return 1
+        print("Native artifact archive audit passed.")
+        return 0
     if args.audit_only:
         print("Windows artifact audit passed.")
         return 0

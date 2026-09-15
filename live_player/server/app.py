@@ -33,6 +33,7 @@ _STATIC_ROOT = Path(__file__).resolve().parents[1] / "web"
 _STATIC_ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/transcription.js": ("transcription.js", "application/javascript; charset=utf-8"),
     "/transport-local.js": ("transport-local.js", "application/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/vendor/hls.min.js": ("vendor/hls.min.js", "application/javascript; charset=utf-8"),

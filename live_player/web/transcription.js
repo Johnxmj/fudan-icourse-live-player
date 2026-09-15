@@ -173,6 +173,23 @@ function markdownCell(value) {
   return String(value ?? "").replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/[\r\n]+/gu, " ");
 }
 
+function markdownInline(value) {
+  return markdownCell(value).replace(/([`*_[\]])/gu, "\\$1");
+}
+
+function receiptTimestamp(now) {
+  let value;
+  try { value = now(); } catch { value = Date.now(); }
+  const date = new Date(Number.isFinite(value) ? value : Date.now());
+  return Number.isFinite(date.valueOf()) ? date.toISOString() : new Date().toISOString();
+}
+
+function markedKeywords(keywords) {
+  if (!Array.isArray(keywords) || !keywords.length) return "";
+  const values = keywords.filter(keyword => typeof keyword === "string" && keyword).map(markdownInline);
+  return values.length ? ` **关键词：${values.join("、")}**` : "";
+}
+
 export function buildTranscriptMarkdown(session = {}) {
   const course = session.course && typeof session.course === "object" ? session.course : {};
   const settings = session.settings && typeof session.settings === "object" ? session.settings : {};
@@ -192,13 +209,13 @@ export function buildTranscriptMarkdown(session = {}) {
     "",
     "## 告警记录",
     "",
-    "| 时间 | 关键词 | 文本 |",
-    "| --- | --- | --- |",
-    ...alerts.map((alert) => `| ${timestamp(alert.timestamp ?? alert.start)} | ${markdownCell(alert.keyword)} | ${markdownCell(alert.text)} |`),
+    "| 课程时间 | 接收时间 | 关键词 | 文本 |",
+    "| --- | --- | --- | --- |",
+    ...alerts.map((alert) => `| ${timestamp(alert.timestamp ?? alert.start)} | ${markdownCell(alert.receivedAt || "—")} | ${markdownCell(alert.keyword)} | ${markdownCell(alert.text)} |`),
     "",
     "## 转录内容",
     "",
-    ...transcript.map((line) => `[${timestamp(line.start)}] ${markdownCell(normalizeText(line.text))}`),
+    ...transcript.map((line) => `[${timestamp(line.start)}] ${markdownInline(normalizeText(line.text))}${markedKeywords(line.keywords)}`),
     "",
   ];
   return lines.join("\n");
@@ -256,7 +273,8 @@ export function createTranscriptionController({ transport, storage = globalThis.
   let streamPromise = null;
   const transcript = [];
   const alerts = [];
-  const allowAlert = createAlertCooldown({ now });
+  const clock = typeof now === "function" ? now : () => Date.now();
+  const allowAlert = createAlertCooldown({ now: clock });
   const emit = () => onUpdate(snapshot());
   const snapshot = () => freezeSnapshot({
     settings: { ...settings, keywords: [...settings.keywords] },
@@ -279,7 +297,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
       const line = { start: event.start, end: event.end, text, keywords };
       transcript.push(line);
       for (const keyword of keywords) {
-        const alert = { keyword, timestamp: event.start, text };
+        const alert = Object.freeze({ keyword, timestamp: event.start, receivedAt: receiptTimestamp(clock), text });
         alerts.push(alert);
         onAlert(freezeSnapshot({ ...alert, settings: { pageAlert: settings.pageAlert, soundAlert: settings.soundAlert, systemAlert: settings.systemAlert } }));
       }
