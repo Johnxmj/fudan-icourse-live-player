@@ -263,3 +263,48 @@ test("extension-only mode explains that the local helper is required", async () 
   assert.equal(transcriptionStart.disabled, true);
   assert.match(transcriptionStatus.textContent, /本地助手/);
 });
+
+test("Pages course changes cancel a late local transcription start before streaming", async () => {
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: true, innerHTML: "", textContent: "", hidden: false, listeners: {},
+    setAttribute() {}, addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+    click() { for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} }); },
+  });
+  const state = element();
+  const start = element();
+  const byName = new Map([
+    ["live-state", state], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", start], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", element()], ["transcription-status", element()], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { if (selector === "[data-live-state]") return state; const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  let resolveStart;
+  const stops = [];
+  const streams = [];
+  const courses = [
+    { course_id: "old", sub_id: "one", course_title: "旧课程", available_views: ["teacher"] },
+    { course_id: "new", sub_id: "two", course_title: "新课程", available_views: ["teacher"] },
+  ];
+  const app = await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/live/") },
+    extensionFactory: undefined,
+    localFactory: () => ({
+      name: "local", probe: async () => true, getState: () => "connected", listLive: async () => courses,
+      transcriptionCapabilities: async () => ({ available: true }),
+      startTranscription: () => new Promise(resolve => { resolveStart = resolve; }),
+      streamTranscription: async (sessionId) => streams.push(sessionId),
+      stopTranscription: async sessionId => stops.push(sessionId),
+      mountPlayer: () => ({ dispose() {} }),
+    }),
+  });
+  await app.selectCourse("old", "one");
+  start.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  app.selectCourse("new", "two");
+  resolveStart({ session_id: "tx-late" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.deepEqual(stops, ["tx-late"]);
+  assert.deepEqual(streams, []);
+  assert.equal(app.activeCourse.course_id, "new");
+});

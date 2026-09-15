@@ -363,13 +363,13 @@ export function mountLivePlayerApp(options = {}) {
     transcription = createTranscriptionController({ transport, storage, onUpdate: renderTranscription, onAlert: onTranscriptionAlert });
     try {
       const capabilities = await transcription.transcriptionCapabilities();
-      transcriptionAvailable = capabilities?.enabled !== false;
+      transcriptionAvailable = capabilities?.available === true;
     } catch { transcriptionAvailable = false; }
     renderTranscription();
   };
   const stopForCourseChange = () => {
     const snapshot = transcription?.snapshot();
-    if (snapshot?.activeSessionId) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。"));
+    if (snapshot?.activeSessionId || snapshot?.starting) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。"));
   };
 
   function setStatus(text, tone = "muted") {

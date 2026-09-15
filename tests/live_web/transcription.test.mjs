@@ -118,6 +118,23 @@ test("controller persists only settings while keeping immutable transcript snaps
   assert.throws(() => { snapshot.transcript[0].text = "mutated"; }, TypeError);
 });
 
+test("cooldown keeps repeated transcript text but removes its suppressed keyword highlight", async () => {
+  const transport = {
+    startTranscription: async () => ({ session_id: "tx-cooldown" }),
+    streamTranscription: async (_sessionId, { onEvent }) => {
+      onEvent({ type: "segment", start: 1, end: 2, text: "请签到" });
+      onEvent({ type: "segment", start: 3, end: 4, text: "再次签到" });
+    },
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport, now: () => 0 });
+  await controller.start({ course_id: "37142", sub_id: "659200" });
+  await controller.waitForStream();
+
+  assert.deepEqual(controller.snapshot().transcript.map(line => line.keywords), [["签到"], []]);
+  assert.equal(controller.snapshot().alerts.length, 1);
+});
+
 test("Markdown download revokes its Blob URL immediately after clicking", () => {
   const calls = [];
   const urlApi = {

@@ -273,11 +273,10 @@ export function createTranscriptionController({ transport, storage = globalThis.
     if (event.type === "segment") {
       const text = normalizeText(event.text);
       if (!text) return;
-      const keywords = matchKeywords(text, settings.keywords);
+      const keywords = matchKeywords(text, settings.keywords).filter((keyword) => allowAlert(keyword));
       const line = { start: event.start, end: event.end, text, keywords };
       transcript.push(line);
       for (const keyword of keywords) {
-        if (!allowAlert(keyword)) continue;
         const alert = { keyword, timestamp: event.start, text };
         alerts.push(alert);
         onAlert(freezeSnapshot({ ...alert, settings: { pageAlert: settings.pageAlert, soundAlert: settings.soundAlert, systemAlert: settings.systemAlert } }));

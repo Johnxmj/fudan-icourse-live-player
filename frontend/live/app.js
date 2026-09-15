@@ -204,10 +204,10 @@ export async function boot({
   const mountTranscription = async () => {
     if (transcription || transport?.name !== "local") { renderTranscription(); return; }
     transcription = createTranscriptionController({ transport, storage: windowRef?.localStorage, onUpdate: renderTranscription, onAlert: onTranscriptionAlert });
-    try { const capabilities = await transcription.transcriptionCapabilities(); transcriptionAvailable = capabilities?.enabled !== false; } catch (_) { transcriptionAvailable = false; }
+    try { const capabilities = await transcription.transcriptionCapabilities(); transcriptionAvailable = capabilities?.available === true; } catch (_) { transcriptionAvailable = false; }
     renderTranscription();
   };
-  const stopForCourseChange = () => { if (transcription?.snapshot().activeSessionId) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。")); };
+  const stopForCourseChange = () => { const snapshot = transcription?.snapshot(); if (snapshot?.activeSessionId || snapshot?.starting) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。")); };
   const show = (value, message = "") => {
     if (disposed) return;
     mountState(state, value, { windowRef });

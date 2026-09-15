@@ -330,7 +330,7 @@ test("transcription starts only after the explicit button click", async () => {
   };
   const requests = createFetchSequence([
     createJsonResponse(200, [course]),
-    createJsonResponse(200, { enabled: true }),
+    createJsonResponse(200, { available: true }),
     createJsonResponse(200, { session_id: "tx-1" }),
   ]);
   const { doc, win, elements } = createLivePlayerDom();
@@ -347,7 +347,7 @@ test("transcription starts only after the explicit button click", async () => {
 
 test("transcription start stays disabled when the local helper lacks the capability", async () => {
   const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
-  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, { enabled: false })]);
+  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, { available: false })]);
   const { doc, win, elements } = createLivePlayerDom();
   const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
   mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
@@ -355,6 +355,36 @@ test("transcription start stays disabled when the local helper lacks the capabil
   await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/transcription/capabilities")), "expected capability probe");
   assert.equal(elements.transcriptionStart.disabled, true);
   assert.match(elements.transcriptionStatus.textContent, /支持转录的本地助手/);
+});
+
+test("changing courses cancels a late transcription start before it opens a stream", async () => {
+  const oldCourse = { course_id: "old", sub_id: "one", course_title: "旧课程", media_token: "media-old", available_views: ["teacher"] };
+  const newCourse = { course_id: "new", sub_id: "two", course_title: "新课程", media_token: "media-new", available_views: ["teacher"] };
+  const calls = [];
+  let resolveStart;
+  const fetchImpl = (url, init = {}) => {
+    calls.push({ url, init });
+    if (url.endsWith("/api/live-courses")) return Promise.resolve(createJsonResponse(200, [oldCourse, newCourse]));
+    if (url.endsWith("/api/transcription/capabilities")) return Promise.resolve(createJsonResponse(200, { available: true }));
+    if (url.endsWith("/api/transcription/start")) return new Promise(resolve => { resolveStart = resolve; });
+    if (url.endsWith("/api/transcription/stop")) return Promise.resolve(createJsonResponse(200, {}));
+    return Promise.resolve(createJsonResponse(200, {}));
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  const app = mountLivePlayerApp({ document: doc, window: win, fetchImpl, token: "session-token" });
+  await waitFor(() => calls.some(call => call.url.endsWith("/api/transcription/capabilities")), "expected capability probe");
+  elements.transcriptionStart.click();
+  await waitFor(() => typeof resolveStart === "function", "expected transcription start request");
+  app.selectCourse("new");
+  resolveStart(createJsonResponse(200, { session_id: "tx-late" }));
+  await waitFor(() => calls.some(call => call.url.endsWith("/api/transcription/stop")), "expected late session stop");
+
+  const stop = calls.find(call => call.url.endsWith("/api/transcription/stop"));
+  assert.deepEqual(JSON.parse(stop.init.body), { session_id: "tx-late" });
+  assert.equal(calls.some(call => call.url.includes("/api/transcription/events/")), false);
+  assert.equal(app.state.activeCourse.course_id, "new");
+  assert.equal(elements.transcriptionExport.disabled, true);
 });
 
 test("requires login when session has expired", () => {
