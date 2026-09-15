@@ -1,3 +1,5 @@
+import { parseSseStream } from "./transcription.js";
+
 const DEFAULT_HEADERS = {
   Accept: "application/json",
 };
@@ -108,6 +110,14 @@ export function createLocalTransport(baseUrl, token, options = {}) {
     return response.text();
   }
 
+  async function postJson(path, payload) {
+    return requestJson(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
   return {
     baseUrl: base.origin,
     listLiveCourses() {
@@ -118,6 +128,22 @@ export function createLocalTransport(baseUrl, token, options = {}) {
     },
     requestJson,
     requestText,
+    transcriptionCapabilities() {
+      return requestJson("/api/transcription/capabilities");
+    },
+    startTranscription(options) {
+      return postJson("/api/transcription/start", options);
+    },
+    async streamTranscription(sessionId, { signal, onEvent } = {}) {
+      const response = await request(`/api/transcription/events/${encodeURIComponent(sessionId)}`, {
+        headers: { Accept: "text/event-stream" },
+        signal,
+      });
+      return parseSseStream(response.body, { signal, onEvent });
+    },
+    stopTranscription(sessionId) {
+      return postJson("/api/transcription/stop", { session_id: sessionId });
+    },
     manifestUrl(courseId, subId, view, mediaToken = "") {
       const url = joinUrl(base, `/media/${encodeURIComponent(courseId)}/${encodeURIComponent(subId)}/${encodeURIComponent(view)}/manifest.m3u8`);
       return withQuery(url, { media_token: mediaToken }).toString();

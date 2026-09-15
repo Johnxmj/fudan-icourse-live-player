@@ -85,3 +85,41 @@ test("exchanges bootstrap once, then uses only the in-memory bearer", async () =
     assert.equal("bootstrap" in transport, false);
   });
 });
+
+test("Pages transport authenticates transcription requests after pairing", async () => {
+  const location = new URL("https://johnxmj.github.io/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
+  const calls = [];
+  await withHistory(location, async () => {
+    const transport = createLocalTransport(location, async (url, init = {}) => {
+      calls.push({ url, init });
+      if (url.endsWith("/api/session")) return response({ token: "session" });
+      return {
+        ...response(url.endsWith("/start") ? { session_id: "tx-1" } : {}),
+        headers: { get: () => "application/json" },
+        text: async () => "",
+        body: new ReadableStream({ start(controller) { controller.close(); } }),
+      };
+    });
+    await transport.startTranscription({ course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
+    await transport.streamTranscription("tx-1", { onEvent() {} });
+    await transport.stopTranscription("tx-1");
+  });
+
+  assert.equal(calls[1].init.headers.Authorization, "Bearer session");
+  assert.equal(calls[1].url, "http://127.0.0.1:43123/api/transcription/start");
+  assert.equal(calls[2].init.headers.Authorization, "Bearer session");
+  assert.deepEqual(JSON.parse(calls[3].init.body), { session_id: "tx-1" });
+});
+
+test("Pages transcription errors retain null as the stable missing code", async () => {
+  const location = new URL("https://johnxmj.github.io/live/#bridge=http%3A%2F%2F127.0.0.1%3A43123&bootstrap=once");
+  await withHistory(location, async () => {
+    const transport = createLocalTransport(location, async (url) => {
+      if (url.endsWith("/api/session")) return response({ token: "session" });
+      return response({ error: { message: "Unavailable" } }, false, 503);
+    });
+    await assert.rejects(transport.transcriptionCapabilities(), (error) => (
+      error.status === 503 && error.code === null && error.message === "Unavailable"
+    ));
+  });
+});

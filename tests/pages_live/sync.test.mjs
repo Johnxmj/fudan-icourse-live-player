@@ -12,3 +12,9 @@ test("Pages vendor assets match the local player", () => {
     assert.equal(createHash("sha256").update(source).digest("hex"), createHash("sha256").update(target).digest("hex"));
   }
 });
+
+test("Pages transcription logic matches the local player", () => {
+  const source = readFileSync("live_player/web/transcription.js");
+  const target = readFileSync("frontend/live/transcription.js");
+  assert.equal(createHash("sha256").update(source).digest("hex"), createHash("sha256").update(target).digest("hex"));
+});

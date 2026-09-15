@@ -7,6 +7,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = new Map([
   ["live_player/web/vendor/hls.min.js", "frontend/live/vendor/hls.min.js"],
   ["live_player/web/vendor/LICENSE", "frontend/live/vendor/LICENSE"],
+  ["live_player/web/transcription.js", "frontend/live/transcription.js"],
 ]);
 
 function digest(path) {
