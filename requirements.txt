@@ -1,2 +1,4 @@
 requests
 pycryptodome
+faster-whisper>=1.1,<2
+numpy>=1.23,<3
