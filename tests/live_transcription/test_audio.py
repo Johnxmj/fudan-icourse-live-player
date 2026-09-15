@@ -1,0 +1,112 @@
+"""Pipe-only ffmpeg reader tests."""
+
+import subprocess
+import threading
+import unittest
+from unittest.mock import patch
+
+from live_player.transcription.audio import (
+    AudioStreamError,
+    FfmpegPcmReader,
+    build_ffmpeg_command,
+)
+
+
+def loopback_url():
+    return "http://127.0.0.1:4310/media/course1/sub1/teacher_audio/manifest.m3u8?media_token=opaque"
+
+
+class FakeStream:
+    def __init__(self, chunks=()):
+        self._chunks = list(chunks)
+
+    def read(self, _size=-1):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class FakeProcess:
+    def __init__(self, stdout_chunks=(), stderr_chunks=(), returncode=0):
+        self.stdout = FakeStream(stdout_chunks)
+        self.stderr = FakeStream(stderr_chunks)
+        self.returncode = returncode
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_calls = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminate_calls += 1
+
+    def kill(self):
+        self.kill_calls += 1
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        return self.returncode
+
+
+class FfmpegPcmReaderTest(unittest.TestCase):
+    def test_ffmpeg_command_is_pcm_pipe_only(self):
+        command = build_ffmpeg_command(loopback_url())
+
+        self.assertEqual(
+            command[-8:],
+            ["-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"],
+        )
+        self.assertNotIn("-y", command)
+        self.assertFalse(any(value.endswith((".wav", ".mp3", ".pcm")) for value in command))
+
+    def test_reader_terminates_child_when_cancelled(self):
+        process = FakeProcess(stdout_chunks=[b"a" * 3200])
+        stop = threading.Event()
+        reader = FfmpegPcmReader(process_factory=lambda *_: process)
+        iterator = reader.frames(loopback_url(), stop)
+
+        self.assertEqual(next(iterator), b"a" * 3200)
+        stop.set()
+        iterator.close()
+
+        self.assertEqual(process.terminate_calls, 1)
+        self.assertEqual(process.wait_calls, [5])
+
+    def test_reader_rejects_urls_outside_the_local_media_route(self):
+        unsafe_urls = (
+            "https://127.0.0.1:4310/media/course1/sub1/teacher/manifest.m3u8",
+            "http://localhost:4310/media/course1/sub1/teacher/manifest.m3u8",
+            "http://127.0.0.1:0/media/course1/sub1/teacher/manifest.m3u8",
+            "http://user:password@127.0.0.1:4310/media/course1/sub1/teacher/manifest.m3u8",
+            "http://127.0.0.1:4310/media/course1/../teacher/manifest.m3u8",
+            "http://127.0.0.1:4310/media/course1/sub1/not-a-view/manifest.m3u8",
+            "http://127.0.0.1:4310/media/course1/sub1/teacher/manifest.m3u8#secret",
+        )
+        reader = FfmpegPcmReader(process_factory=lambda *_: self.fail("must not start ffmpeg"))
+
+        for url in unsafe_urls:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                next(reader.frames(url, threading.Event()))
+
+    def test_reader_uses_only_pipe_standard_streams(self):
+        process = FakeProcess()
+        with patch("live_player.transcription.audio.subprocess.Popen", return_value=process) as start:
+            list(FfmpegPcmReader().frames(loopback_url(), threading.Event()))
+
+        self.assertEqual(start.call_count, 1)
+        self.assertIs(start.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(start.call_args.kwargs["stdout"], subprocess.PIPE)
+        self.assertIs(start.call_args.kwargs["stderr"], subprocess.PIPE)
+
+    def test_reader_error_is_sanitized(self):
+        url = loopback_url()
+        process = FakeProcess(stderr_chunks=[b"failed " + url.encode()], returncode=17)
+        reader = FfmpegPcmReader(process_factory=lambda *_: process)
+
+        with self.assertRaisesRegex(AudioStreamError, "code 17") as raised:
+            list(reader.frames(url, threading.Event()))
+
+        self.assertNotIn(url, str(raised.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
