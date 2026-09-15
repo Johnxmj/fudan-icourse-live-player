@@ -7,7 +7,25 @@ from live_player.server.handler import serve
 
 
 class HandlerTest(unittest.TestCase):
-    def test_streamed_response_keeps_explicit_content_length(self):
+    def test_serve_records_the_actual_numeric_loopback_authority(self):
+        class Application:
+            def __init__(self):
+                self.authorities = []
+
+            def set_loopback_authority(self, authority):
+                self.authorities.append(authority)
+
+            def handle(self, method, path, headers, body):
+                raise AssertionError("request handling is not needed")
+
+        application = Application()
+        server = serve(application)
+        try:
+            self.assertEqual(application.authorities, ["127.0.0.1:" + str(server.server_address[1])])
+        finally:
+            server.server_close()
+
+    def test_streamed_response_omits_content_length_and_flushes_each_chunk(self):
         stream = BytesIO(b"media")
 
         class Application:
@@ -17,10 +35,14 @@ class HandlerTest(unittest.TestCase):
         class RecordingWriter:
             def __init__(self):
                 self.parts = []
+                self.flushes = 0
 
             def write(self, value):
                 self.parts.append(value)
                 return len(value)
+
+            def flush(self):
+                self.flushes += 1
 
         server = serve(Application())
         try:
@@ -36,8 +58,9 @@ class HandlerTest(unittest.TestCase):
             handler.wfile = RecordingWriter()
             handler.do_GET()
             payload = b"".join(handler.wfile.parts)
-            self.assertIn(b"Content-Length: 5\r\n", payload)
+            self.assertNotIn(b"Content-Length:", payload)
             self.assertIn(b"media", payload)
+            self.assertEqual(handler.wfile.flushes, 1)
             self.assertTrue(stream.closed)
         finally:
             server.server_close()

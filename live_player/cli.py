@@ -16,6 +16,7 @@ import webbrowser
 from live_player.core.session import SessionManager
 from live_player.server.app import LiveApplication
 from live_player.server.handler import serve
+from live_player.transcription.session import TranscriptionManager
 from src.api.icourse import ICourseClient
 from src.api.webvpn import WebVPNSession
 
@@ -41,12 +42,14 @@ def _create_client(student_id: str, password: str) -> ICourseClient:
     return ICourseClient(vpn)
 
 
-def build_application(env=None, *, session_manager=None) -> LauncherConfig:
+def build_application(env=None, *, session_manager=None, transcription_manager=None, port=0) -> LauncherConfig:
     env = os.environ if env is None else env
     student_id = _env_value(env, "StuId")
     password = _env_value(env, "UISPsw")
     if not student_id or not password:
         raise ValueError("StuId and UISPsw must be set")
+    if type(port) is not int or not 0 <= port <= 65535:
+        raise ValueError("port must be between 0 and 65535")
 
     course_ids = tuple(
         item.strip()
@@ -54,12 +57,17 @@ def build_application(env=None, *, session_manager=None) -> LauncherConfig:
         if item.strip()
     )
     session_manager = session_manager or SessionManager(lambda: _create_client(student_id, password))
-    application = LiveApplication(session_manager, course_ids=course_ids)
+    transcription_manager = transcription_manager or TranscriptionManager()
+    application = LiveApplication(
+        session_manager,
+        course_ids=course_ids,
+        transcription_manager=transcription_manager,
+    )
     bootstrap_token = application.issue_bootstrap_token(ttl_seconds=60)
     return LauncherConfig(
         application=application,
         host="127.0.0.1",
-        port=0,
+        port=port,
         bootstrap_token=bootstrap_token,
         course_ids=course_ids,
     )
@@ -254,7 +262,11 @@ def main(argv=None, env=None) -> int:
     parser.add_argument("--pages", action="store_true", help="open the GitHub Pages live shell with a fragment pairing")
     parser.add_argument("--interactive", action="store_true", help="按提示输入学号、密码和课程，无需配置环境变量")
     parser.add_argument("--select-courses", action="store_true", help="重新按课程名或教师搜索，替换已保存的课程选择")
+    parser.add_argument("--port", type=int, default=0, help="advanced: loopback port (0 selects one automatically)")
     args = parser.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        print("port must be between 0 and 65535", file=sys.stderr)
+        return 2
     values = dict(os.environ if env is None else env)
     session_manager = None
     try:
@@ -288,7 +300,7 @@ def main(argv=None, env=None) -> int:
                 except OSError:
                     print("课程已选好，但当前目录无法保存选择；下次启动需要重新选择。", file=sys.stderr)
         # Create the one-use bootstrap only after the interactive selection ends.
-        config = build_application(values, session_manager=session_manager)
+        config = build_application(values, session_manager=session_manager, port=args.port)
     except (ValueError, EOFError):
         print("尚未配置登录信息。请使用 --interactive 按提示启动，或设置 StuId / UISPsw。", file=sys.stderr)
         return 2

@@ -5,6 +5,17 @@ from live_player import cli
 
 
 class InteractiveLauncherTest(unittest.TestCase):
+    def test_main_passes_only_valid_explicit_loopback_ports_to_launcher(self):
+        env = {"StuId": "student", "UISPsw": "secret", "COURSE_IDS": "1"}
+        with patch("live_player.cli.launch_player") as launch:
+            self.assertEqual(cli.main(["--port", "4310"], env=env), 0)
+        self.assertEqual(launch.call_args.args[0].host, "127.0.0.1")
+        self.assertEqual(launch.call_args.args[0].port, 4310)
+
+        with patch("live_player.cli.sys.stderr") as stderr:
+            self.assertEqual(cli.main(["--port", "65536"], env=env), 2)
+        self.assertIn("port must be between 0 and 65535", "".join(str(call) for call in stderr.write.call_args_list))
+
     def test_interactive_login_does_not_modify_environment_or_echo_password(self):
         original = {"OTHER": "kept"}
         ask = Mock(side_effect=[" 20260001 "])
