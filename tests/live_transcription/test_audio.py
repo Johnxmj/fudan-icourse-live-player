@@ -9,6 +9,7 @@ from live_player.transcription.audio import (
     AudioStreamError,
     FfmpegPcmReader,
     build_ffmpeg_command,
+    resolve_ffmpeg_executable,
 )
 
 
@@ -69,6 +70,25 @@ class BlockingProcess(FakeProcess):
 
 
 class FfmpegPcmReaderTest(unittest.TestCase):
+    def test_resolver_prefers_wheel_ffmpeg_before_path(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value="C:/wheel/ffmpeg.exe"), \
+                patch("live_player.transcription.audio.Path.is_file", return_value=True), \
+                patch("live_player.transcription.audio.shutil.which") as which:
+            self.assertEqual(resolve_ffmpeg_executable(), "C:/wheel/ffmpeg.exe")
+        which.assert_not_called()
+
+    def test_resolver_reports_a_clear_error_without_wheel_or_path_ffmpeg(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value=""), \
+                patch("live_player.transcription.audio.shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "未找到 ffmpeg，请安装后重新启动本地助手。"):
+                resolve_ffmpeg_executable()
+
+    def test_resolver_falls_back_to_path_when_wheel_lookup_fails(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", side_effect=RuntimeError("missing")), \
+                patch("live_player.transcription.audio.shutil.which", return_value="C:/system/ffmpeg.exe"), \
+                patch("live_player.transcription.audio.Path.is_file", return_value=True):
+            self.assertEqual(resolve_ffmpeg_executable(), "C:/system/ffmpeg.exe")
+
     def test_ffmpeg_command_is_pcm_pipe_only(self):
         command = build_ffmpeg_command(loopback_url())
 

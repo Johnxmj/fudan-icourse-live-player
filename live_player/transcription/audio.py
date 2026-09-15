@@ -1,11 +1,15 @@
 """Read a locally served HLS stream as in-memory PCM blocks."""
 
 from collections.abc import Iterator
+from pathlib import Path
 from queue import Empty, Full, Queue
 import re
+import shutil
 import subprocess
 import threading
 from urllib.parse import urlsplit
+
+import imageio_ffmpeg
 
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9]{1,64}$")
@@ -17,6 +21,20 @@ _STOP_WAIT_SECONDS = 5
 
 class AudioStreamError(RuntimeError):
     """An ffmpeg stream ended unexpectedly without exposing its source URL."""
+
+
+def resolve_ffmpeg_executable() -> str:
+    """Prefer the packaged imageio-ffmpeg binary, then a system installation."""
+    try:
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+    except (OSError, RuntimeError):
+        bundled = None
+    if bundled and Path(bundled).is_file():
+        return bundled
+    system = shutil.which("ffmpeg")
+    if system and Path(system).is_file():
+        return system
+    raise RuntimeError("未找到 ffmpeg，请安装后重新启动本地助手。")
 
 
 def _validate_manifest_url(manifest_url):
@@ -49,9 +67,10 @@ def _validate_manifest_url(manifest_url):
         raise ValueError("invalid local media manifest URL")
 
 
-def build_ffmpeg_command(manifest_url, ffmpeg="ffmpeg"):
+def build_ffmpeg_command(manifest_url, ffmpeg=None):
     """Build the sole supported ffmpeg invocation: mono 16 kHz PCM on stdout."""
     _validate_manifest_url(manifest_url)
+    ffmpeg = resolve_ffmpeg_executable() if ffmpeg is None else ffmpeg
     if not isinstance(ffmpeg, str) or not ffmpeg:
         raise ValueError("invalid ffmpeg executable")
     return [

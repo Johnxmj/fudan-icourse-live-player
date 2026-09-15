@@ -13,4 +13,13 @@ class LiveReleaseWorkflowTest(unittest.TestCase):
     def test_artifact_allowlist_excludes_private_files(self):
         self.assertFalse(is_allowed_artifact_input(Path(".env")))
         self.assertFalse(is_allowed_artifact_input(Path("data/icourse.db")))
+        self.assertFalse(is_allowed_artifact_input(Path("transcripts/live.md")))
+        self.assertFalse(is_allowed_artifact_input(Path("models--Systran--faster-whisper-base/blob")))
         self.assertTrue(is_allowed_artifact_input(Path("live_player/web/index.html")))
+
+    def test_release_workflow_audits_archive_listings_after_each_native_build(self):
+        text = (ROOT / ".github/workflows/release-live-player.yml").read_text(encoding="utf-8")
+        self.assertIn("--audit-only", text)
+        self.assertIn("unzip -Z1", text)
+        self.assertIn("models--", text.lower())
+        self.assertIn("live-v*", text)
