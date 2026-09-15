@@ -47,6 +47,27 @@ class FakeProcess:
         return self.returncode
 
 
+class BlockingUntilTerminatedStream:
+    def __init__(self):
+        self.read_started = threading.Event()
+        self.released = threading.Event()
+
+    def read(self, _size=-1):
+        self.read_started.set()
+        self.released.wait()
+        return b""
+
+
+class BlockingProcess(FakeProcess):
+    def __init__(self):
+        super().__init__()
+        self.stdout = BlockingUntilTerminatedStream()
+
+    def terminate(self):
+        super().terminate()
+        self.stdout.released.set()
+
+
 class FfmpegPcmReaderTest(unittest.TestCase):
     def test_ffmpeg_command_is_pcm_pipe_only(self):
         command = build_ffmpeg_command(loopback_url())
@@ -70,6 +91,33 @@ class FfmpegPcmReaderTest(unittest.TestCase):
 
         self.assertEqual(process.terminate_calls, 1)
         self.assertEqual(process.wait_calls, [5])
+
+    def test_reader_cancels_while_stdout_read_is_stalled(self):
+        process = BlockingProcess()
+        stop = threading.Event()
+        iterator = FfmpegPcmReader(process_factory=lambda *_: process).frames(loopback_url(), stop)
+        finished = threading.Event()
+
+        def consume():
+            try:
+                next(iterator)
+            except StopIteration:
+                pass
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=consume)
+        worker.start()
+        try:
+            self.assertTrue(process.stdout.read_started.wait(1))
+            stop.set()
+            self.assertTrue(finished.wait(1))
+        finally:
+            process.stdout.released.set()
+            worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(process.terminate_calls, 1)
 
     def test_reader_rejects_urls_outside_the_local_media_route(self):
         unsafe_urls = (

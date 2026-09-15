@@ -53,15 +53,21 @@ class PcmSegmenter:
     def push(self, data):
         """Accept little-endian s16le bytes and return newly complete windows."""
         try:
-            raw = memoryview(data).cast("B").tobytes()
+            raw = memoryview(data).cast("B")
         except (TypeError, ValueError) as exc:
             raise ValueError("PCM data must be bytes-like") from exc
-        raw = self._trailing_byte + raw
+        parts = []
+        if self._trailing_byte:
+            if not raw:
+                return []
+            parts.append(memoryview(self._trailing_byte + raw[:1].tobytes()))
+            raw = raw[1:]
+            self._trailing_byte = b""
         complete_size = len(raw) - (len(raw) % 2)
-        complete, self._trailing_byte = raw[:complete_size], raw[complete_size:]
-        if complete:
-            samples = np.frombuffer(complete, dtype="<i2").astype(np.float32) / 32768.0
-            self._append(samples)
+        if complete_size:
+            parts.append(raw[:complete_size])
+        self._trailing_byte = raw[complete_size:].tobytes()
+        self._append_parts(parts)
         return self._emit_complete_windows()
 
     def flush(self):
@@ -84,17 +90,48 @@ class PcmSegmenter:
         self._trailing_byte = b""
         return windows
 
-    def _append(self, samples):
+    def _append_parts(self, parts):
+        incoming_samples = sum(len(part) // 2 for part in parts)
+        excess = max(0, len(self._buffer) + incoming_samples - self._max_buffer_samples)
+        old_samples_to_drop = min(excess, len(self._buffer))
+        self._drop_oldest(old_samples_to_drop)
+        incoming_samples_to_drop = excess - old_samples_to_drop
+        if incoming_samples_to_drop:
+            self._buffer_start += incoming_samples_to_drop
+            self._next_start = max(self._next_start, self._buffer_start)
+            self._dropped_samples += incoming_samples_to_drop
+        samples = self._convert_retained_parts(parts, incoming_samples_to_drop)
+        if not len(samples):
+            return
         if len(self._buffer):
             self._buffer = np.concatenate((self._buffer, samples))
         else:
             self._buffer = samples.copy()
-        excess = len(self._buffer) - self._max_buffer_samples
-        if excess > 0:
-            self._buffer = self._buffer[excess:].copy()
-            self._buffer_start += excess
-            self._dropped_samples += excess
-            self._next_start = max(self._next_start, self._buffer_start)
+
+    def _convert_retained_parts(self, parts, samples_to_skip):
+        converted = []
+        for part in parts:
+            part_samples = len(part) // 2
+            if samples_to_skip >= part_samples:
+                samples_to_skip -= part_samples
+                continue
+            if samples_to_skip:
+                part = part[samples_to_skip * 2:]
+                samples_to_skip = 0
+            converted.append(np.frombuffer(part, dtype="<i2").astype(np.float32) / 32768.0)
+        if not converted:
+            return np.empty(0, dtype=np.float32)
+        if len(converted) == 1:
+            return converted[0]
+        return np.concatenate(converted)
+
+    def _drop_oldest(self, count):
+        if not count:
+            return
+        self._buffer = self._buffer[count:].copy()
+        self._buffer_start += count
+        self._next_start = max(self._next_start, self._buffer_start)
+        self._dropped_samples += count
 
     def _emit_complete_windows(self):
         windows = []

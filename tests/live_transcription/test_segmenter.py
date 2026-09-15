@@ -1,6 +1,7 @@
 """Bounded PCM segmentation tests."""
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -38,6 +39,32 @@ class PcmSegmenterTest(unittest.TestCase):
         segmenter.push(pcm_samples(100 * 10))
 
         self.assertLessEqual(segmenter.buffered_seconds, 30)
+        self.assertGreater(segmenter.dropped_seconds, 0)
+
+    def test_segmenter_crops_huge_input_before_float_conversion(self):
+        sample_rate = 10
+        max_buffer_seconds = 30
+        segmenter = PcmSegmenter(
+            sample_rate=sample_rate,
+            window_seconds=12,
+            overlap_seconds=2,
+            max_buffer_seconds=max_buffer_seconds,
+        )
+        total_samples = 100_000
+        maximum_conversion_bytes = sample_rate * max_buffer_seconds * 2
+        original_frombuffer = np.frombuffer
+        converted_sizes = []
+
+        def bounded_frombuffer(data, *args, **kwargs):
+            converted_sizes.append(memoryview(data).nbytes)
+            self.assertLessEqual(memoryview(data).nbytes, maximum_conversion_bytes)
+            return original_frombuffer(data, *args, **kwargs)
+
+        with patch("live_player.transcription.segmenter.np.frombuffer", side_effect=bounded_frombuffer):
+            windows = segmenter.push(bytes(total_samples * 2))
+
+        self.assertTrue(converted_sizes)
+        self.assertEqual(windows[0].start, (total_samples - sample_rate * max_buffer_seconds) / sample_rate)
         self.assertGreater(segmenter.dropped_seconds, 0)
 
     def test_segmenter_converts_signed_pcm_to_float32(self):

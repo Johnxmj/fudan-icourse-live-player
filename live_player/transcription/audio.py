@@ -1,6 +1,7 @@
 """Read a locally served HLS stream as in-memory PCM blocks."""
 
 from collections.abc import Iterator
+from queue import Empty, Full, Queue
 import re
 import subprocess
 import threading
@@ -94,6 +95,51 @@ class _BoundedStderr:
                 self._contents.extend(chunk[:remaining])
 
 
+class _PcmStdout:
+    """Drain a blocking pipe on a daemon thread through a bounded queue."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._chunks = Queue(maxsize=2)
+        self._closed = threading.Event()
+        self._finished = threading.Event()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+
+    @property
+    def finished(self):
+        return self._finished.is_set()
+
+    def start(self):
+        self._thread.start()
+
+    def close(self):
+        self._closed.set()
+
+    def join(self):
+        self._thread.join(timeout=_STOP_WAIT_SECONDS)
+
+    def pop(self):
+        try:
+            return self._chunks.get(timeout=0.1)
+        except Empty:
+            return None
+
+    def _drain(self):
+        try:
+            while not self._closed.is_set():
+                chunk = self._stream.read(_PCM_BLOCK_BYTES)
+                if not chunk:
+                    return
+                while not self._closed.is_set():
+                    try:
+                        self._chunks.put(chunk, timeout=0.1)
+                        break
+                    except Full:
+                        pass
+        finally:
+            self._finished.set()
+
+
 class FfmpegPcmReader:
     """Spawn ffmpeg with pipes only and yield aligned PCM blocks from stdout."""
 
@@ -110,14 +156,18 @@ class FfmpegPcmReader:
             raise ValueError("invalid ffmpeg command")
         process = self._start_process(command)
         stderr = _BoundedStderr(process.stderr)
+        stdout = _PcmStdout(process.stdout)
         stderr.start()
+        stdout.start()
         completed = False
         pending = b""
         try:
             while not stop_event.is_set():
-                chunk = process.stdout.read(_PCM_BLOCK_BYTES)
-                if not chunk:
-                    break
+                chunk = stdout.pop()
+                if chunk is None:
+                    if stdout.finished:
+                        break
+                    continue
                 pending += chunk
                 while len(pending) >= _PCM_BLOCK_BYTES:
                     yield pending[:_PCM_BLOCK_BYTES]
@@ -131,8 +181,10 @@ class FfmpegPcmReader:
                 if return_code:
                     raise AudioStreamError(f"ffmpeg audio stream exited with code {return_code}")
         finally:
+            stdout.close()
             if not completed:
                 self._stop_process(process)
+            stdout.join()
             stderr.join()
 
     def _start_process(self, command):
