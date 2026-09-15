@@ -167,7 +167,7 @@ Keyword settings and alert toggles may persist in browser local storage because 
 
 ## Port and settings behavior
 
-This local-model design has no AI API URL or API-key setting. The local helper continues to bind an automatically selected loopback port and passes that address to the page through the existing fragment-only pairing URL. Normal users do not type a port. The existing launcher/CLI port override remains available for advanced users who need a fixed loopback port.
+This local-model design has no AI API URL or API-key setting. The local helper binds an automatically selected loopback port and passes that address to the page through the existing fragment-only pairing URL. Normal users do not type a port. Add an advanced `--port` launcher option for users who need a fixed loopback port; it must still bind only to `127.0.0.1`.
 
 ## Markdown export
 
