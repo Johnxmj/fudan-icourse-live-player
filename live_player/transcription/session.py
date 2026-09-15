@@ -336,11 +336,14 @@ class TranscriptionManager:
             if code != "LIVE_ENDED":
                 final_state = "error"
         finally:
-            if session.stop_event.is_set():
-                final_state, code = "stopped", None
-            elif final_state == "error":
-                session.emit({"type": "error", "code": code, "message": _ERROR_MESSAGES[code]})
             with session.condition:
+                # Decide and publish completion under the same lock as stop().
+                # Reserved terminal slots ensure these emits never release it
+                # to wait for space between the outcome decision and done.
+                if session.stop_event.is_set():
+                    final_state, code = "stopped", None
+                elif final_state == "error":
+                    session.emit({"type": "error", "code": code, "message": _ERROR_MESSAGES[code]})
                 if session.timer is not None:
                     session.timer.cancel()
                     session.timer = None

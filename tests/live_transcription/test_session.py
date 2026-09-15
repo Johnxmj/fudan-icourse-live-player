@@ -450,6 +450,55 @@ class SessionTests(unittest.TestCase):
         frames = b"".join(manager.events(manager.start(OPTIONS, lambda: SECRET_URL)))
         self.assertNotIn(b"FAKESECRET", frames)
 
+    def test_successful_stop_wins_before_terminal_commit(self):
+        for outcome in ("LIVE_ENDED", "AUDIO_UNAVAILABLE"):
+            with self.subTest(outcome=outcome):
+                at_commit, release_commit = threading.Event(), threading.Event()
+                manager = self.manager()
+                self.addCleanup(release_commit.set)
+
+                class GatedCondition:
+                    """Pause finalization before acquiring its shared lock."""
+
+                    def __init__(self, condition):
+                        self.condition = condition
+                        self.armed = False
+
+                    def __enter__(self):
+                        if self.armed and threading.current_thread() is manager._session.worker:
+                            self.armed = False
+                            at_commit.set()
+                            release_commit.wait()
+                        return self.condition.__enter__()
+
+                    def __exit__(self, *args):
+                        return self.condition.__exit__(*args)
+
+                    def __getattr__(self, name):
+                        return getattr(self.condition, name)
+
+                def session_factory(*args):
+                    session = _Session(*args)
+                    session.condition = GatedCondition(session.condition)
+                    return session
+
+                def manifest():
+                    # The source has selected its terminal outcome. The worker
+                    # will next acquire the condition to publish that outcome.
+                    manager._session.condition.armed = True
+                    raise TranscriptionSourceError(outcome)
+
+                with patch("live_player.transcription.session._Session", side_effect=session_factory):
+                    session_id = manager.start(OPTIONS, manifest)
+                self.assertTrue(at_commit.wait(2))
+                with patch("live_player.transcription.session._JOIN_SECONDS", 0):
+                    self.assertTrue(manager.stop(session_id))
+                release_commit.set()
+                records = self.records(manager, session_id)
+                self.assertEqual(records[-1], {"type": "ended", "state": "stopped"})
+                self.assertNotIn("error", [record["type"] for record in records])
+                self.assertFalse(manager.stop(session_id))
+
 
 if __name__ == "__main__":
     unittest.main()
