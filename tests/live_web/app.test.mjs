@@ -345,6 +345,73 @@ test("transcription starts only after the explicit button click", async () => {
   assert.deepEqual(JSON.parse(start.init.body), { course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
 });
 
+test("offline transcription UI smoke renders alerts, cooldown, completion, export, and manual stop", async () => {
+  const course = {
+    course_id: "37142", sub_id: "659200", course_title: "离线演示课", media_token: "local-only", available_views: ["teacher"],
+  };
+  const encoder = new TextEncoder();
+  const transcriptEvents = [
+    { type: "state", state: "listening" },
+    { type: "segment", start: 1, end: 2, text: "请大家签到" },
+    { type: "segment", start: 3, end: 4, text: "再次签到" },
+    { type: "ended", state: "stopped" },
+  ].map((record) => `event: transcript\ndata: ${JSON.stringify(record)}\n\n`).join("");
+  const calls = [];
+  let starts = 0;
+  let secondStreamCancelled = false;
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, init });
+    if (url.endsWith("/api/live-courses")) return createJsonResponse(200, [course]);
+    if (url.endsWith("/api/transcription/capabilities")) return createJsonResponse(200, { available: true });
+    if (url.endsWith("/api/transcription/start")) return createJsonResponse(200, { session_id: `tx-${++starts}` });
+    if (url.endsWith("/api/transcription/stop")) return createJsonResponse(200, {});
+    if (url.endsWith("/api/transcription/events/tx-1")) {
+      return { ok: true, status: 200, body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(transcriptEvents)); controller.close(); } }) };
+    }
+    if (url.endsWith("/api/transcription/events/tx-2")) {
+      return { ok: true, status: 200, body: new ReadableStream({ cancel() { secondStreamCancelled = true; } }) };
+    }
+    throw new Error(`unexpected offline fixture request: ${url}`);
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  const originalDocument = globalThis.document;
+  const originalUrl = globalThis.URL;
+  let exportedBlob = null;
+  const clicks = [];
+  class ExportUrl extends originalUrl {
+    static createObjectURL(blob) { exportedBlob = blob; return "blob:offline-smoke"; }
+    static revokeObjectURL() {}
+  }
+  globalThis.URL = ExportUrl;
+  globalThis.document = { createElement() { return { click() { clicks.push(this); } }; } };
+  try {
+    const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+    mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl, token: "offline-session" });
+    await waitFor(() => elements.transcriptionStart.disabled === false, "offline fixture should expose manual transcription start");
+    elements.transcriptionStart.click();
+    await waitFor(() => elements.transcriptionState.textContent === "已停止", "fixture should render the ended state");
+    assert.match(elements.transcriptionLines.innerHTML, /请大家签到/);
+    assert.equal((elements.transcriptionLines.innerHTML.match(/is-alert/g) || []).length, 1, "签到 cooldown should suppress only the repeated highlight");
+    assert.equal(elements.transcriptionAlert.hidden, false);
+    assert.match(elements.transcriptionAlert.innerHTML, /签到/);
+    assert.equal(elements.transcriptionExport.disabled, false);
+    elements.transcriptionExport.click();
+    assert.equal(clicks.length, 1);
+    assert.match(await exportedBlob.text(), /请大家签到/);
+    assert.match(await exportedBlob.text(), /再次签到/);
+
+    elements.transcriptionStart.click();
+    await waitFor(() => calls.some((call) => call.url.endsWith("/api/transcription/events/tx-2")), "second manual start should open the fake stream");
+    elements.transcriptionStop.click();
+    await waitFor(() => secondStreamCancelled, "manual stop should abort the fake stream");
+    assert.equal(calls.filter((call) => call.url.endsWith("/api/transcription/stop")).length, 1);
+    assert.ok(calls.every((call) => call.url.startsWith("http://127.0.0.1:8000/")), "offline fixture must not contact Fudan");
+  } finally {
+    globalThis.URL = originalUrl;
+    globalThis.document = originalDocument;
+  }
+});
+
 test("transcription start stays disabled when the local helper lacks the capability", async () => {
   const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
   const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, { available: false })]);
