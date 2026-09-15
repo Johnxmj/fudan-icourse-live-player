@@ -202,6 +202,38 @@ test("concurrent stop requests share one remote shutdown", async () => {
   assert.deepEqual(await Promise.all([first, second]), [true, true]);
 });
 
+test("an old stop finalizer cannot take ownership from a new session", async () => {
+  const releaseStops = new Map();
+  const signals = new Map();
+  const stops = [];
+  let sequence = 0;
+  const transport = {
+    startTranscription: async () => ({ session_id: ++sequence === 1 ? "tx-a" : "tx-b" }),
+    streamTranscription: async (sessionId, { signal }) => {
+      signals.set(sessionId, signal);
+      await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+    },
+    stopTranscription: (sessionId) => {
+      stops.push(sessionId);
+      return new Promise(resolve => releaseStops.set(sessionId, resolve));
+    },
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "a", sub_id: "one" });
+  const stopA = controller.stop();
+  controller.clear();
+  await controller.start({ course_id: "b", sub_id: "two" });
+  releaseStops.get("tx-a")();
+  await stopA;
+  const stopB = controller.stop();
+
+  assert.deepEqual(stops, ["tx-a", "tx-b"]);
+  assert.equal(signals.get("tx-a").aborted, true);
+  assert.equal(signals.get("tx-b").aborted, true);
+  releaseStops.get("tx-b")();
+  await stopB;
+});
+
 test("stopping while a start is pending tears down the late session without relabeling a record", async () => {
   let resolveStart;
   const stops = [];

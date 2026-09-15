@@ -245,8 +245,10 @@ export function createTranscriptionController({ transport, storage = globalThis.
   let course = null;
   let sessionId = null;
   let activeSessionId = null;
+  let activeGeneration = null;
+  let sessionGeneration = 0;
   let starting = false;
-  let stopPromise = null;
+  let stopping = null;
   let cancelStart = false;
   let cancelStartOptions = {};
   let state = "idle";
@@ -282,7 +284,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
         onAlert(freezeSnapshot({ ...alert, settings: { pageAlert: settings.pageAlert, soundAlert: settings.soundAlert, systemAlert: settings.systemAlert } }));
       }
     } else if (event.type === "state") state = event.state;
-    else if (event.type === "ended") { state = event.state; activeSessionId = null; }
+    else if (event.type === "ended") { state = event.state; activeSessionId = null; activeGeneration = null; aborter = null; }
     else if (event.type === "error") state = "error";
     emit();
   };
@@ -316,9 +318,12 @@ export function createTranscriptionController({ transport, storage = globalThis.
         course = requestedCourse;
         sessionId = nextSessionId;
         activeSessionId = nextSessionId;
+        const nextGeneration = ++sessionGeneration;
+        activeGeneration = nextGeneration;
         starting = false;
         if (cancelStart) {
           activeSessionId = null;
+          activeGeneration = null;
           course = previousCourse;
           sessionId = previousSessionId;
           state = "stopped";
@@ -326,9 +331,14 @@ export function createTranscriptionController({ transport, storage = globalThis.
           finally { emit(); }
           return null;
         }
-        aborter = new AbortController();
-        streamPromise = transport.streamTranscription(activeSessionId, { signal: aborter.signal, onEvent: receive })
-          .catch((error) => { if (error?.name !== "AbortError") { state = "error"; emit(); } });
+        const nextAborter = new AbortController();
+        aborter = nextAborter;
+        streamPromise = transport.streamTranscription(activeSessionId, {
+          signal: nextAborter.signal,
+          onEvent: (event) => { if (activeGeneration === nextGeneration) receive(event); },
+        }).catch((error) => {
+          if (error?.name !== "AbortError" && activeGeneration === nextGeneration) { state = "error"; emit(); }
+        });
         emit();
         return sessionId;
       } catch (error) {
@@ -340,26 +350,36 @@ export function createTranscriptionController({ transport, storage = globalThis.
       }
     },
     async stop(options = {}) {
-      if (stopPromise) return stopPromise;
       if (starting && !activeSessionId) {
         cancelStart = true;
         cancelStartOptions = options;
         emit();
         return true;
       }
+      if (!activeSessionId && stopping) return stopping.promise;
       if (!activeSessionId) return false;
       const current = activeSessionId;
+      const currentGeneration = activeGeneration;
+      const currentAborter = aborter;
+      if (stopping?.sessionId === current && stopping.generation === currentGeneration) return stopping.promise;
       activeSessionId = null;
-      aborter?.abort();
+      activeGeneration = null;
+      if (aborter === currentAborter) aborter = null;
+      currentAborter?.abort();
       state = "stopped";
       emit();
       let stopped;
       try { stopped = transport.stopTranscription(current, options); }
       catch (error) { stopped = Promise.reject(error); }
-      stopPromise = Promise.resolve(stopped)
+      const record = { sessionId: current, generation: currentGeneration, promise: null };
+      record.promise = Promise.resolve(stopped)
         .then(() => true)
-        .finally(() => { aborter = null; stopPromise = null; emit(); });
-      return stopPromise;
+        .finally(() => {
+          if (stopping === record) stopping = null;
+          if (activeGeneration === null) emit();
+        });
+      stopping = record;
+      return record.promise;
     },
     async waitForStream() { await streamPromise; },
     clear() {
