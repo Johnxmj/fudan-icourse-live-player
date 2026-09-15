@@ -73,6 +73,7 @@ class FfmpegPcmReaderTest(unittest.TestCase):
     def test_resolver_prefers_wheel_ffmpeg_before_path(self):
         with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value="C:/wheel/ffmpeg.exe"), \
                 patch("live_player.transcription.audio.Path.is_file", return_value=True), \
+                patch("live_player.transcription.audio.sys.platform", "win32"), \
                 patch("live_player.transcription.audio.shutil.which") as which:
             self.assertEqual(resolve_ffmpeg_executable(), "C:/wheel/ffmpeg.exe")
         which.assert_not_called()
@@ -86,8 +87,33 @@ class FfmpegPcmReaderTest(unittest.TestCase):
     def test_resolver_falls_back_to_path_when_wheel_lookup_fails(self):
         with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", side_effect=RuntimeError("missing")), \
                 patch("live_player.transcription.audio.shutil.which", return_value="C:/system/ffmpeg.exe"), \
+                patch("live_player.transcription.audio.sys.platform", "win32"), \
                 patch("live_player.transcription.audio.Path.is_file", return_value=True):
             self.assertEqual(resolve_ffmpeg_executable(), "C:/system/ffmpeg.exe")
+
+    def test_resolver_rejects_existing_non_executable_wheel_file_for_valid_path(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value="C:/wheel/not-ffmpeg.txt"), \
+                patch("live_player.transcription.audio.shutil.which", return_value="C:/system/ffmpeg.exe"), \
+                patch("live_player.transcription.audio.sys.platform", "win32"), \
+                patch("live_player.transcription.audio.Path.is_file", return_value=True):
+            self.assertEqual(resolve_ffmpeg_executable(), "C:/system/ffmpeg.exe")
+
+    def test_resolver_rejects_all_existing_non_executable_candidates(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value="C:/wheel/not-ffmpeg.txt"), \
+                patch("live_player.transcription.audio.shutil.which", return_value="C:/system/not-ffmpeg.txt"), \
+                patch("live_player.transcription.audio.sys.platform", "win32"), \
+                patch("live_player.transcription.audio.Path.is_file", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "未找到 ffmpeg，请安装后重新启动本地助手。"):
+                resolve_ffmpeg_executable()
+
+    def test_resolver_requires_execute_permission_on_posix(self):
+        with patch("live_player.transcription.audio.imageio_ffmpeg.get_ffmpeg_exe", return_value="/wheel/ffmpeg"), \
+                patch("live_player.transcription.audio.shutil.which", return_value="/system/ffmpeg"), \
+                patch("live_player.transcription.audio.sys.platform", "linux"), \
+                patch("live_player.transcription.audio.Path.is_file", return_value=True), \
+                patch("live_player.transcription.audio.os.access", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "未找到 ffmpeg，请安装后重新启动本地助手。"):
+                resolve_ffmpeg_executable()
 
     def test_ffmpeg_command_is_pcm_pipe_only(self):
         command = build_ffmpeg_command(loopback_url())

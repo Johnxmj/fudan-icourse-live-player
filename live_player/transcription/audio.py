@@ -3,9 +3,11 @@
 from collections.abc import Iterator
 from pathlib import Path
 from queue import Empty, Full, Queue
+import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from urllib.parse import urlsplit
 
@@ -17,10 +19,22 @@ _SAFE_VIEW = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 _PCM_BLOCK_BYTES = 32_000
 _MAX_STDERR_BYTES = 32 * 1024
 _STOP_WAIT_SECONDS = 5
+_WINDOWS_EXECUTABLE_SUFFIXES = {".exe", ".com", ".bat", ".cmd"}
 
 
 class AudioStreamError(RuntimeError):
     """An ffmpeg stream ended unexpectedly without exposing its source URL."""
+
+
+def _is_executable_candidate(value: str | None) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    candidate = Path(value)
+    if not candidate.is_file():
+        return False
+    if sys.platform.startswith("win"):
+        return candidate.suffix.lower() in _WINDOWS_EXECUTABLE_SUFFIXES
+    return os.access(candidate, os.X_OK)
 
 
 def resolve_ffmpeg_executable() -> str:
@@ -29,10 +43,10 @@ def resolve_ffmpeg_executable() -> str:
         bundled = imageio_ffmpeg.get_ffmpeg_exe()
     except (OSError, RuntimeError):
         bundled = None
-    if bundled and Path(bundled).is_file():
+    if _is_executable_candidate(bundled):
         return bundled
     system = shutil.which("ffmpeg")
-    if system and Path(system).is_file():
+    if _is_executable_candidate(system):
         return system
     raise RuntimeError("未找到 ffmpeg，请安装后重新启动本地助手。")
 
