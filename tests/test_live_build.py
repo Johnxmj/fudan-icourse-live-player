@@ -51,15 +51,25 @@ class NativeBuildTest(unittest.TestCase):
                 package.writestr("Fudan/models--Systran/model.bin", "fixture")
                 package.writestr("Fudan/transcripts/live.md", "fixture")
                 package.writestr("Fudan/audio/lecture.wav", "fixture")
+                package.writestr("Fudan/audio/recording.txt", "user data")
+                package.writestr("Fudan/data/transcript.json", "user data")
+                package.writestr("Fudan/data/README.md", "user data")
                 package.writestr("Fudan/libavcodec.dll", "runtime")
                 package.writestr("Fudan/_internal/av/audio/runtime.py", "runtime")
+                package.writestr("Fudan/_internal/av/audio/user/data/notes.txt", "user data")
+                package.writestr("Fudan/user/_internal/av/audio/recording.txt", "user data")
                 package.writestr("Fudan/_internal/cv2/data/cascade.xml", "runtime")
 
             denied = build_windows.audit_archive(archive)
 
         self.assertEqual(
             denied,
-            ["Fudan/models--Systran/model.bin", "Fudan/transcripts/live.md", "Fudan/audio/lecture.wav"],
+            [
+                "Fudan/models--Systran/model.bin", "Fudan/transcripts/live.md", "Fudan/audio/lecture.wav",
+                "Fudan/audio/recording.txt", "Fudan/data/transcript.json", "Fudan/data/README.md",
+                "Fudan/_internal/av/audio/user/data/notes.txt",
+                "Fudan/user/_internal/av/audio/recording.txt",
+            ],
         )
 
 

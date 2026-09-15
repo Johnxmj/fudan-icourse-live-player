@@ -14,7 +14,18 @@ DENIED_PARTS = {
     ".env", "data", "_run_logs", "cookie", "cookies", "credential", "credentials", ".git",
     "transcript", "transcripts", "models--", "huggingface", "whisper-cache", "audio",
 }
-ARCHIVE_DENIED_PARTS = DENIED_PARTS - {"audio", "data"}
+# PyInstaller's dependency tree contains a few package-owned directories named
+# ``audio`` or ``data``.  Keep those exact runtime prefixes while rejecting
+# same-named user files everywhere else in the generated archive.
+ARCHIVE_RUNTIME_PREFIXES = (
+    ("_internal", "av", "audio"),
+    ("_internal", "cv2", "data"),
+    ("_internal", "sacremoses", "data"),
+    ("_internal", "torch", "distributed", "elastic", "utils", "data"),
+    ("_internal", "torch", "testing", "_internal", "data"),
+    ("_internal", "torch", "utils", "data"),
+    ("_internal", "transformers", "data"),
+)
 ALLOWED_ROOTS = {"live_player", "src", "frontend/live"}
 
 def is_allowed_artifact_input(path: Path) -> bool:
@@ -53,13 +64,27 @@ def audit_archive(archive: Path) -> list[str]:
             parts = [part.lower() for part in Path(name).parts]
             filename = parts[-1] if parts else ""
             if (
-                any(part in ARCHIVE_DENIED_PARTS or part.startswith("models--") for part in parts)
+                any(
+                    part in DENIED_PARTS - {"audio", "data"} or
+                    (part in {"audio", "data"} and not _is_runtime_component(parts, index)) or
+                    part.startswith("models--")
+                    for index, part in enumerate(parts)
+                )
                 or filename.endswith((".bin", ".wav", ".mp3", ".pcm", ".m4a", ".aac", ".flac", ".ogg"))
                 or "cookie" in filename
                 or "credential" in filename
             ):
                 denied.append(name)
     return denied
+
+
+def _is_runtime_component(parts: list[str], index: int) -> bool:
+    """Allow only the component named by an explicit packaged-runtime prefix."""
+    return any(
+        start == 1 and index == start + len(prefix) - 1 and tuple(parts[start:start + len(prefix)]) == prefix
+        for prefix in ARCHIVE_RUNTIME_PREFIXES
+        for start in range(len(parts) - len(prefix) + 1)
+    )
 
 def build(output: Path) -> Path:
     """Build on the target OS and archive only PyInstaller's generated directory."""

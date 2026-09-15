@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 
 import { createHls, nextRecoveryAction } from "../../live_player/web/app.js";
 
@@ -345,11 +347,10 @@ test("transcription starts only after the explicit button click", async () => {
   assert.deepEqual(JSON.parse(start.init.body), { course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
 });
 
-test("offline transcription UI smoke renders alerts, cooldown, completion, export, and manual stop", async () => {
+test("loopback transcription UI smoke uses the real page transport and SSE fixture", async () => {
   const course = {
     course_id: "37142", sub_id: "659200", course_title: "离线演示课", media_token: "local-only", available_views: ["teacher"],
   };
-  const encoder = new TextEncoder();
   const transcriptEvents = [
     { type: "state", state: "listening" },
     { type: "segment", start: 1, end: 2, text: "请大家签到" },
@@ -359,21 +360,57 @@ test("offline transcription UI smoke renders alerts, cooldown, completion, expor
   const calls = [];
   let starts = 0;
   let secondStreamCancelled = false;
-  const fetchImpl = async (url, init = {}) => {
-    calls.push({ url, init });
-    if (url.endsWith("/api/live-courses")) return createJsonResponse(200, [course]);
-    if (url.endsWith("/api/transcription/capabilities")) return createJsonResponse(200, { available: true });
-    if (url.endsWith("/api/transcription/start")) return createJsonResponse(200, { session_id: `tx-${++starts}` });
-    if (url.endsWith("/api/transcription/stop")) return createJsonResponse(200, {});
-    if (url.endsWith("/api/transcription/events/tx-1")) {
-      return { ok: true, status: 200, body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(transcriptEvents)); controller.close(); } }) };
+  const fixtureServer = createServer(async (request, response) => {
+    const body = [];
+    for await (const chunk of request) body.push(chunk);
+    const url = new URL(request.url, "http://127.0.0.1");
+    calls.push({ method: request.method, url: url.pathname, body: Buffer.concat(body).toString("utf8") });
+    const sendJson = (status, payload) => {
+      const encoded = JSON.stringify(payload);
+      response.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(encoded) });
+      response.end(encoded);
+    };
+    if (request.method === "GET" && url.pathname === "/") {
+      const html = readFileSync("live_player/web/index.html");
+      response.writeHead(200, { "content-type": "text/html", "content-length": html.length });
+      response.end(html);
+    } else if (request.method === "GET" && url.pathname === "/app.js") {
+      const source = readFileSync("live_player/web/app.js");
+      response.writeHead(200, { "content-type": "text/javascript", "content-length": source.length });
+      response.end(source);
+    } else if (request.method === "GET" && url.pathname === "/api/live-courses") {
+      sendJson(200, [course]);
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/capabilities") {
+      sendJson(200, { available: true });
+    } else if (request.method === "POST" && url.pathname === "/api/transcription/start") {
+      sendJson(200, { session_id: `tx-${++starts}` });
+    } else if (request.method === "POST" && url.pathname === "/api/transcription/stop") {
+      sendJson(200, {});
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/events/tx-1") {
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      response.end(transcriptEvents);
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/events/tx-2") {
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      request.on("aborted", () => { secondStreamCancelled = true; });
+      response.on("close", () => { if (!response.writableEnded) secondStreamCancelled = true; });
+    } else {
+      sendJson(404, { error: { message: `unexpected fixture request: ${request.method} ${url.pathname}` } });
     }
-    if (url.endsWith("/api/transcription/events/tx-2")) {
-      return { ok: true, status: 200, body: new ReadableStream({ cancel() { secondStreamCancelled = true; } }) };
-    }
-    throw new Error(`unexpected offline fixture request: ${url}`);
+  });
+  await new Promise((resolve) => fixtureServer.listen(0, "127.0.0.1", resolve));
+  const { port } = fixtureServer.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const realFetch = globalThis.fetch;
+  const fetchCalls = [];
+  const guardedFetch = async (url, init) => {
+    const parsed = new URL(url);
+    fetchCalls.push(parsed.href);
+    if (parsed.hostname !== "127.0.0.1") throw new Error(`non-loopback request: ${parsed.href}`);
+    return realFetch(url, init);
   };
   const { doc, win, elements } = createLivePlayerDom();
+  win.location.origin = baseUrl;
+  win.fetch = guardedFetch;
   const originalDocument = globalThis.document;
   const originalUrl = globalThis.URL;
   let exportedBlob = null;
@@ -385,8 +422,16 @@ test("offline transcription UI smoke renders alerts, cooldown, completion, expor
   globalThis.URL = ExportUrl;
   globalThis.document = { createElement() { return { click() { clicks.push(this); } }; } };
   try {
+    const page = await guardedFetch(`${baseUrl}/`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<script type="module">[\s\S]*import \{ mountLivePlayerApp \} from "\.\/app\.js"/);
+    const appModule = await guardedFetch(`${baseUrl}/app.js`);
+    assert.equal(appModule.status, 200);
+    assert.match(await appModule.text(), /mountLivePlayerApp/);
     const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
-    mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl, token: "offline-session" });
+    const app = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, baseUrl, token: "offline-session" });
+    await waitFor(() => calls.some((call) => call.url === "/api/live-courses"), "fixture should load the catalog");
+    await app.connect();
     await waitFor(() => elements.transcriptionStart.disabled === false, "offline fixture should expose manual transcription start");
     elements.transcriptionStart.click();
     await waitFor(() => elements.transcriptionState.textContent === "已停止", "fixture should render the ended state");
@@ -401,14 +446,18 @@ test("offline transcription UI smoke renders alerts, cooldown, completion, expor
     assert.match(await exportedBlob.text(), /再次签到/);
 
     elements.transcriptionStart.click();
-    await waitFor(() => calls.some((call) => call.url.endsWith("/api/transcription/events/tx-2")), "second manual start should open the fake stream");
+    await waitFor(() => calls.some((call) => call.url.endsWith("/api/transcription/events/tx-2")), "second manual start should open the fixture stream");
     elements.transcriptionStop.click();
     await waitFor(() => secondStreamCancelled, "manual stop should abort the fake stream");
-    assert.equal(calls.filter((call) => call.url.endsWith("/api/transcription/stop")).length, 1);
-    assert.ok(calls.every((call) => call.url.startsWith("http://127.0.0.1:8000/")), "offline fixture must not contact Fudan");
+    await waitFor(() => calls.filter((call) => call.url === "/api/transcription/stop").length === 1, "manual stop should reach the fixture server");
+    assert.equal(calls.filter((call) => call.url === "/api/transcription/stop").length, 1);
+    assert.ok(fetchCalls.every((url) => new URL(url).hostname === "127.0.0.1"), "offline fixture must not contact Fudan");
+    assert.equal(fetchCalls.some((url) => url.includes("model")), false, "UI smoke must not load a model");
   } finally {
     globalThis.URL = originalUrl;
     globalThis.document = originalDocument;
+    fixtureServer.close();
+    fixtureServer.closeAllConnections?.();
   }
 });
 
