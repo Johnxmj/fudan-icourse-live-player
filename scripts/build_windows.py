@@ -14,6 +14,7 @@ DENIED_PARTS = {
     ".env", "data", "_run_logs", "cookie", "cookies", "credential", "credentials", ".git",
     "transcript", "transcripts", "models--", "huggingface", "whisper-cache", "audio",
 }
+ARCHIVE_DENIED_PARTS = DENIED_PARTS - {"audio", "data"}
 ALLOWED_ROOTS = {"live_player", "src", "frontend/live"}
 
 def is_allowed_artifact_input(path: Path) -> bool:
@@ -52,7 +53,7 @@ def audit_archive(archive: Path) -> list[str]:
             parts = [part.lower() for part in Path(name).parts]
             filename = parts[-1] if parts else ""
             if (
-                any(part in DENIED_PARTS or part.startswith("models--") for part in parts)
+                any(part in ARCHIVE_DENIED_PARTS or part.startswith("models--") for part in parts)
                 or filename.endswith((".bin", ".wav", ".mp3", ".pcm", ".m4a", ".aac", ".flac", ".ogg"))
                 or "cookie" in filename
                 or "credential" in filename

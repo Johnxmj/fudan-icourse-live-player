@@ -52,6 +52,8 @@ class NativeBuildTest(unittest.TestCase):
                 package.writestr("Fudan/transcripts/live.md", "fixture")
                 package.writestr("Fudan/audio/lecture.wav", "fixture")
                 package.writestr("Fudan/libavcodec.dll", "runtime")
+                package.writestr("Fudan/_internal/av/audio/runtime.py", "runtime")
+                package.writestr("Fudan/_internal/cv2/data/cascade.xml", "runtime")
 
             denied = build_windows.audit_archive(archive)
 
