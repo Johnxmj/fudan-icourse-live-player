@@ -55,6 +55,7 @@ test("SSE parsing accepts only safe event records across arbitrary chunk boundar
     "event: transcript\ndata: {\"type\":\"seg",
     "ment\",\"start\":62,\"end\":64.5,\"text\":\"请 签到\",\"private\":\"nope\"}\n\n",
     "event: transcript\ndata: {\"type\":\"error\",\"code\":\"AUDIO_UNAVAILABLE\",\"message\":\"Audio unavailable\",\"stack\":\"secret\"}\n\n",
+    "event: transcript\ndata: {\"type\":\"ended\",\"state\":\"<img src=x onerror=alert(1)>\"}\n\n",
     "event: unknown\ndata: {\"type\":\"segment\",\"text\":\"ignore\"}\n\n",
   ]), { onEvent: (event) => events.push(event) });
 
@@ -142,4 +143,64 @@ test("controller retains the completed session ID for Markdown export after stop
   const markdown = controller.exportMarkdown({ download: false, exportedAt: new Date("2026-09-15T00:00:00Z") });
 
   assert.match(markdown, /转录会话：tx-keep/);
+});
+
+test("controller synchronously locks concurrent starts until the first start resolves", async () => {
+  let resolveStart;
+  let starts = 0;
+  const transport = {
+    startTranscription: () => {
+      starts += 1;
+      return new Promise((resolve) => { resolveStart = resolve; });
+    },
+    streamTranscription: async () => {},
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport });
+  const first = controller.start({ course_id: "37142", sub_id: "659200" });
+  await assert.rejects(controller.start({ course_id: "37142", sub_id: "659200" }), /already active/);
+  assert.equal(starts, 1);
+  resolveStart({ session_id: "tx-1" });
+  await first;
+});
+
+test("failed and malformed starts clear the starting guard and allow retry", async () => {
+  const starts = [
+    () => Promise.reject(new Error("bridge unavailable")),
+    () => Promise.resolve({}),
+    () => Promise.resolve({ session_id: "tx-retry" }),
+  ];
+  const transport = {
+    startTranscription: () => starts.shift()(),
+    streamTranscription: async () => {},
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport });
+  const course = { course_id: "37142", sub_id: "659200" };
+
+  await assert.rejects(controller.start(course), /bridge unavailable/);
+  assert.deepEqual(controller.snapshot().state, "error");
+  assert.equal(controller.snapshot().activeSessionId, null);
+  await assert.rejects(controller.start(course), /session ID missing/);
+  assert.deepEqual(controller.snapshot().state, "error");
+  assert.equal(controller.snapshot().activeSessionId, null);
+  assert.equal(controller.snapshot().sessionId, null);
+  assert.equal(await controller.start(course), "tx-retry");
+});
+
+test("controller stores normalized segment display text and exports the same normalized text", async () => {
+  const transport = {
+    startTranscription: async () => ({ session_id: "tx-text" }),
+    streamTranscription: async (_sessionId, { onEvent }) => {
+      onEvent({ type: "segment", start: 1, end: 2, text: "　ＱＵＩＺ\n请   签 到　" });
+    },
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "37142", sub_id: "659200" });
+  await controller.waitForStream();
+  const expected = "QUIZ 请 签 到";
+
+  assert.equal(controller.snapshot().transcript[0].text, expected);
+  assert.match(controller.exportMarkdown({ download: false }), new RegExp(expected));
 });
