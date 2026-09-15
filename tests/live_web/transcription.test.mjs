@@ -223,15 +223,14 @@ test("an old stop finalizer cannot take ownership from a new session", async () 
   const stopA = controller.stop();
   controller.clear();
   await controller.start({ course_id: "b", sub_id: "two" });
-  releaseStops.get("tx-a")();
-  await stopA;
   const stopB = controller.stop();
 
   assert.deepEqual(stops, ["tx-a", "tx-b"]);
   assert.equal(signals.get("tx-a").aborted, true);
   assert.equal(signals.get("tx-b").aborted, true);
+  releaseStops.get("tx-a")();
   releaseStops.get("tx-b")();
-  await stopB;
+  await Promise.all([stopA, stopB]);
 });
 
 test("stopping while a start is pending tears down the late session without relabeling a record", async () => {
