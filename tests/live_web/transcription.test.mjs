@@ -65,6 +65,23 @@ test("SSE parsing accepts only safe event records across arbitrary chunk boundar
   ]);
 });
 
+test("SSE download progress preserves only a bounded numeric field and drops unsafe fields", async () => {
+  const events = [];
+  await parseSseStream(streamFromChunks([
+    "event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":42,\"url\":\"https://model.invalid/private\",\"error\":\"secret\"}\n\n",
+    "event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":-1}\n\n",
+    "event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":101}\n\n",
+    "event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":\"50\"}\n\n",
+  ]), { onEvent: (event) => events.push(event) });
+
+  assert.deepEqual(events, [
+    { type: "state", state: "downloading-model", progress: 42 },
+    { type: "state", state: "downloading-model" },
+    { type: "state", state: "downloading-model" },
+    { type: "state", state: "downloading-model" },
+  ]);
+});
+
 test("markdown contains escaped alerts, receipt times, and marked keywords but no connection data", () => {
   const markdown = buildTranscriptMarkdown({
     course: { course_id: "37142", sub_id: "659200", name: "课程 | 名称" },
@@ -119,6 +136,23 @@ test("controller persists only settings while keeping immutable transcript snaps
   assert.throws(() => { snapshot.alerts[0].receivedAt = "mutated"; }, TypeError);
   assert.throws(() => snapshot.transcript.push({}), TypeError);
   assert.throws(() => { snapshot.transcript[0].text = "mutated"; }, TypeError);
+});
+
+test("controller exposes sanitized model download progress in its state snapshot", async () => {
+  const transport = {
+    startTranscription: async () => ({ session_id: "tx-progress" }),
+    streamTranscription: async (_sessionId, { onEvent }) => {
+      onEvent({ type: "state", state: "downloading-model", progress: 42 });
+      onEvent({ type: "state", state: "downloading-model", progress: 10 });
+    },
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "37142", sub_id: "659200" });
+  await controller.waitForStream();
+
+  assert.deepEqual(controller.snapshot().state, "downloading-model");
+  assert.equal(controller.snapshot().progress, 42, "a stale in-range update must not regress displayed progress");
 });
 
 test("cooldown keeps repeated transcript text but removes its suppressed keyword highlight", async () => {

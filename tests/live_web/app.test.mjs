@@ -347,6 +347,34 @@ test("transcription starts only after the explicit button click", async () => {
   assert.deepEqual(JSON.parse(start.init.body), { course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
 });
 
+test("transcription UI renders safe model download progress from the SSE state", async () => {
+  const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
+  const encoder = new TextEncoder();
+  const fetchImpl = async (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/api/live-courses") return createJsonResponse(200, [course]);
+    if (path === "/api/transcription/capabilities") return createJsonResponse(200, { available: true });
+    if (path === "/api/transcription/start") return createJsonResponse(200, { session_id: "tx-progress" });
+    if (path === "/api/transcription/events/tx-progress") return {
+      ok: true, status: 200,
+      headers: { get: () => "text/event-stream" },
+      body: new ReadableStream({ start(controller) {
+        controller.enqueue(encoder.encode("event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":42,\"url\":\"https://model.invalid/private\"}\n\n"));
+        controller.close();
+      } }),
+    };
+    throw new Error(`unexpected request ${path}`);
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl, token: "session-token" });
+
+  await waitFor(() => elements.transcriptionStart.disabled === false, "expected available transcription control");
+  elements.transcriptionStart.click();
+  await waitFor(() => /下载模型 42%/.test(elements.transcriptionState.textContent), "expected visible download percentage");
+  assert.match(elements.transcriptionStatus.textContent, /下载.*42%/);
+});
+
 test("loopback transcription UI smoke uses the real page transport and SSE fixture", async () => {
   const course = {
     course_id: "37142", sub_id: "659200", course_title: "离线演示课", media_token: "local-only", available_views: ["teacher"],

@@ -1,11 +1,19 @@
 """Lazy Whisper engine tests using fully offline dependency fakes."""
 
 from dataclasses import replace
+import sys
+import threading
+import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
-from live_player.transcription.engine import WhisperEngine
+from live_player.transcription.engine import (
+    PreparationCancelled,
+    WhisperEngine,
+    _default_model_resolver,
+)
 from live_player.transcription.models import TranscriptSlice, TranscriptionOptions
 
 
@@ -58,6 +66,28 @@ class FakeModelResolver:
         if local_files_only and not self.cached:
             raise FileNotFoundError(repository)
         return repository.rsplit("-", 1)[-1]
+
+
+class CallbackModelResolver(FakeModelResolver):
+    def __init__(self, cached):
+        super().__init__(cached)
+        self.cancel_events = []
+        self.progress_callbacks = []
+
+    def resolve(self, repository, *, local_files_only, cancel_event=None, on_progress=None):
+        self.cancel_events.append(cancel_event)
+        self.progress_callbacks.append(on_progress)
+        return super().resolve(repository, local_files_only=local_files_only)
+
+
+class FakeTqdm:
+    def __init__(self, *args, total=None, **kwargs):
+        del args, kwargs
+        self.total = total
+        self.n = 0
+
+    def update(self, amount=1):
+        self.n += amount
 
 
 class WhisperEngineTest(unittest.TestCase):
@@ -127,6 +157,84 @@ class WhisperEngineTest(unittest.TestCase):
             ],
         )
         self.assertEqual(states, ["downloading-model", "loading-model"])
+
+    def test_prepare_forwards_cancellation_and_download_progress_only_after_cache_miss(self):
+        resolver = CallbackModelResolver(cached=False)
+        engine = WhisperEngine(
+            model_factory=FakeWhisperFactory(),
+            model_resolver=resolver,
+            cuda_detector=lambda: False,
+        )
+        cancelled = threading.Event()
+        progress = []
+
+        engine.prepare(defaults(), lambda _state: None, cancelled, progress.append)
+
+        self.assertEqual(resolver.calls, [
+            ("Systran/faster-whisper-base", True),
+            ("Systran/faster-whisper-base", False),
+        ])
+        self.assertEqual(resolver.cancel_events, [None, cancelled])
+        self.assertEqual(resolver.progress_callbacks, [None, progress.append])
+
+    def test_prepare_keeps_legacy_two_argument_resolvers_compatible(self):
+        resolver = FakeModelResolver(cached=False)
+        engine = WhisperEngine(
+            model_factory=FakeWhisperFactory(),
+            model_resolver=resolver,
+            cuda_detector=lambda: False,
+        )
+
+        engine.prepare(defaults(), lambda _state: None, threading.Event(), lambda _progress: None)
+
+        self.assertEqual(len(resolver.calls), 2)
+
+    def test_default_download_resolver_reports_progress_through_huggingface_tqdm_hook(self):
+        calls, progress = [], []
+        hub = types.ModuleType("huggingface_hub")
+        def snapshot_download(repository, **kwargs):
+            calls.append((repository, kwargs))
+            meter = kwargs["tqdm_class"](total=100)
+            meter.update(25)
+            meter.update(75)
+            return "cached-model"
+        hub.snapshot_download = snapshot_download
+        tqdm_package, tqdm_auto = types.ModuleType("tqdm"), types.ModuleType("tqdm.auto")
+        tqdm_auto.tqdm = FakeTqdm
+        tqdm_package.auto = tqdm_auto
+
+        with patch.dict(sys.modules, {"huggingface_hub": hub, "tqdm": tqdm_package, "tqdm.auto": tqdm_auto}):
+            result = _default_model_resolver(
+                "Systran/faster-whisper-base",
+                local_files_only=False,
+                cancel_event=threading.Event(),
+                on_progress=progress.append,
+            )
+
+        self.assertEqual(result, "cached-model")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "Systran/faster-whisper-base")
+        self.assertEqual(calls[0][1]["local_files_only"], False)
+        self.assertTrue(issubclass(calls[0][1]["tqdm_class"], FakeTqdm))
+        self.assertEqual(progress, [0.0, 25.0, 100.0])
+
+    def test_default_download_resolver_aborts_before_huggingface_progress_starts(self):
+        hub = types.ModuleType("huggingface_hub")
+        hub.snapshot_download = lambda _repository, **kwargs: kwargs["tqdm_class"](total=100)
+        tqdm_package, tqdm_auto = types.ModuleType("tqdm"), types.ModuleType("tqdm.auto")
+        tqdm_auto.tqdm = FakeTqdm
+        tqdm_package.auto = tqdm_auto
+        cancelled = threading.Event()
+        cancelled.set()
+
+        with patch.dict(sys.modules, {"huggingface_hub": hub, "tqdm": tqdm_package, "tqdm.auto": tqdm_auto}):
+            with self.assertRaises(PreparationCancelled):
+                _default_model_resolver(
+                    "Systran/faster-whisper-base",
+                    local_files_only=False,
+                    cancel_event=cancelled,
+                    on_progress=lambda _progress: None,
+                )
 
     def test_engine_bounds_prompt_and_excludes_blank_segments(self):
         factory = FakeWhisperFactory()

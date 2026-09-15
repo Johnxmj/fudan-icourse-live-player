@@ -264,6 +264,41 @@ test("extension-only mode explains that the local helper is required", async () 
   assert.match(transcriptionStatus.textContent, /本地助手/);
 });
 
+test("Pages transcription UI renders bounded local model download progress", async () => {
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: true, innerHTML: "", textContent: "", hidden: false, listeners: {},
+    setAttribute() {}, addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+    click() { for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} }); },
+  });
+  const transcriptionState = element();
+  const transcriptionStatus = element();
+  const transcriptionStart = element();
+  const byName = new Map([
+    ["live-state", element()], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", transcriptionStart], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", transcriptionState], ["transcription-status", transcriptionStatus], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  const app = await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/live/") },
+    extensionFactory: undefined,
+    localFactory: () => ({
+      name: "local", probe: async () => true, getState: () => "connected",
+      listLive: async () => [{ course_id: "c1", sub_id: "s1", course_title: "课程", available_views: ["teacher"] }],
+      transcriptionCapabilities: async () => ({ available: true }),
+      startTranscription: async () => ({ session_id: "tx-progress" }),
+      streamTranscription: async (_id, { onEvent }) => onEvent({ type: "state", state: "downloading-model", progress: 42, url: "https://model.invalid/private" }),
+      stopTranscription: async () => {}, mountPlayer: () => ({ dispose() {} }),
+    }),
+  });
+  await app.selectCourse("c1", "s1");
+  transcriptionStart.click();
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
+
+  assert.equal(transcriptionState.textContent, "下载模型 42%");
+  assert.match(transcriptionStatus.textContent, /下载.*42%/);
+});
+
 test("Pages course changes cancel a late local transcription start before streaming", async () => {
   const element = () => ({
     dataset: {}, disabled: false, value: "", checked: true, innerHTML: "", textContent: "", hidden: false, listeners: {},

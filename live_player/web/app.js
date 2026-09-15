@@ -329,7 +329,12 @@ export function mountLivePlayerApp(options = {}) {
     const snapshot = transcription.snapshot();
     const activeCourse = activeTranscriptionCourse();
     const oldCourse = snapshot.course && activeCourse && !sameCourse(snapshot.course, activeCourse);
-    if (els.transcriptionState) els.transcriptionState.textContent = snapshot.starting ? "启动中" : ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始");
+    const downloadProgress = snapshot.state === "downloading-model" && Number.isFinite(snapshot.progress)
+      ? Math.round(snapshot.progress)
+      : null;
+    if (els.transcriptionState) els.transcriptionState.textContent = snapshot.starting ? "启动中" : downloadProgress === null
+      ? ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始")
+      : `下载模型 ${downloadProgress}%`;
     if (els.transcriptionStart) els.transcriptionStart.disabled = !transcriptionAvailable || !activeCourse || snapshot.starting || Boolean(snapshot.activeSessionId) || Boolean(oldCourse);
     if (els.transcriptionStop) els.transcriptionStop.disabled = !snapshot.activeSessionId;
     if (els.transcriptionExport) els.transcriptionExport.disabled = !snapshot.sessionId;
@@ -344,6 +349,8 @@ export function mountLivePlayerApp(options = {}) {
     if (oldCourse) setTranscriptionStatus("上一门课程的转录仍可导出；请先清空后再开始新课程。");
     else if (!transcriptionAvailable) setTranscriptionStatus("实时转录需要已连接且支持转录的本地助手。");
     else if (!activeCourse) setTranscriptionStatus("选择课程后可开始转录。");
+    else if (snapshot.state === "downloading-model") setTranscriptionStatus(downloadProgress === null ? "正在下载本地模型…" : `正在下载本地模型：${downloadProgress}%。`);
+    else if (snapshot.state === "listening") setTranscriptionStatus("正在实时转录。");
     else if (!snapshot.activeSessionId && !snapshot.starting && !oldCourse && !transcriptionStatus) setTranscriptionStatus("可开始实时转录。");
   };
   const dismissAlert = () => { if (els.transcriptionAlert) { els.transcriptionAlert.hidden = true; els.transcriptionAlert.innerHTML = ""; } };
@@ -880,7 +887,7 @@ export function mountLivePlayerApp(options = {}) {
         if (!course) { renderTranscription(); return; }
         setTranscriptionStatus("正在启动实时转录…");
         await transcription.start(course);
-        setTranscriptionStatus("正在实时转录。");
+        if (transcription.snapshot().state === "listening") setTranscriptionStatus("正在实时转录。");
       })().catch((error) => {
         setTranscriptionStatus(error?.message || "无法启动实时转录。");
         renderTranscription();

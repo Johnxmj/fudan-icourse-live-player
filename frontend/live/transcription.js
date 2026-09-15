@@ -43,7 +43,11 @@ function safeRecord(record) {
     return { type: "segment", start, end, text };
   }
   if (record.type === "state") {
-    return SAFE_STATES.has(record.state) ? { type: "state", state: record.state } : null;
+    if (!SAFE_STATES.has(record.state)) return null;
+    const progress = safeNumber(record.progress);
+    return record.state === "downloading-model" && progress !== null && progress >= 0 && progress <= 100
+      ? { type: "state", state: record.state, progress }
+      : { type: "state", state: record.state };
   }
   if (record.type === "lag") {
     const seconds = safeNumber(record.seconds);
@@ -269,6 +273,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
   let cancelStart = false;
   let cancelStartOptions = {};
   let state = "idle";
+  let progress = null;
   let aborter = null;
   let streamPromise = null;
   const transcript = [];
@@ -283,6 +288,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
     activeSessionId,
     starting,
     state,
+    progress,
     transcript: transcript.map((line) => ({ ...line, keywords: [...line.keywords] })),
     alerts: alerts.map((alert) => ({ ...alert })),
   });
@@ -301,9 +307,16 @@ export function createTranscriptionController({ transport, storage = globalThis.
         alerts.push(alert);
         onAlert(freezeSnapshot({ ...alert, settings: { pageAlert: settings.pageAlert, soundAlert: settings.soundAlert, systemAlert: settings.systemAlert } }));
       }
-    } else if (event.type === "state") state = event.state;
-    else if (event.type === "ended") { state = event.state; activeSessionId = null; activeGeneration = null; aborter = null; }
-    else if (event.type === "error") state = "error";
+    } else if (event.type === "state") {
+      state = event.state;
+      if (state === "downloading-model") {
+        const nextProgress = Number.isFinite(event.progress) && event.progress >= 0 && event.progress <= 100
+          ? event.progress
+          : null;
+        progress = nextProgress === null ? progress : progress === null ? nextProgress : Math.max(progress, nextProgress);
+      } else progress = null;
+    } else if (event.type === "ended") { state = event.state; progress = null; activeSessionId = null; activeGeneration = null; aborter = null; }
+    else if (event.type === "error") { state = "error"; progress = null; }
     emit();
   };
   return {
@@ -326,6 +339,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
       cancelStart = false;
       cancelStartOptions = {};
       state = "starting";
+      progress = null;
       emit();
       try {
         const result = await transport.startTranscription({ course_id: requestedCourse.course_id, sub_id: requestedCourse.sub_id, model: settings.model, language: settings.language });
@@ -344,7 +358,8 @@ export function createTranscriptionController({ transport, storage = globalThis.
           activeGeneration = null;
           course = previousCourse;
           sessionId = previousSessionId;
-          state = "stopped";
+        state = "stopped";
+        progress = null;
           try { await transport.stopTranscription(nextSessionId, cancelStartOptions); }
           finally { emit(); }
           return null;
@@ -363,6 +378,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
         starting = false;
         activeSessionId = null;
         state = cancelStart ? "stopped" : "error";
+        progress = null;
         emit();
         throw error;
       }
@@ -385,6 +401,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
       if (aborter === currentAborter) aborter = null;
       currentAborter?.abort();
       state = "stopped";
+      progress = null;
       emit();
       let stopped;
       try { stopped = transport.stopTranscription(current, options); }
@@ -407,6 +424,7 @@ export function createTranscriptionController({ transport, storage = globalThis.
       course = null;
       sessionId = null;
       state = "idle";
+      progress = null;
       emit();
     },
     exportMarkdown(options = {}) {

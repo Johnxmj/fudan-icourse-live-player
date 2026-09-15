@@ -1,7 +1,9 @@
 """One local transcription worker with a reconnectable, sanitized SSE stream."""
 
 from collections import deque
+import inspect
 import json
+import math
 import secrets
 import threading
 import time
@@ -54,19 +56,32 @@ class _Session:
         self.condition = threading.Condition()
         self.queue = deque()
         self.consumer = None
-        self.timer = None
+        self.attach_deadline_timer = None
+        self.reconnect_timer = None
         self.worker = None
+        self.prepare_thread = None
+        self.prepare_done = False
+        self.prepare_error = None
         self.audio = None
         self.prompt = ""
         self.history = deque(maxlen=256)
         self.last_state = None
+        self.download_progress = None
 
     def emit(self, record):
         with self.condition:
             # Keep two slots free for an error followed by the terminal event.
             limit = 256 if record["type"] in {"error", "ended"} else 254
             if record["type"] == "state" and record.get("state") == self.last_state:
-                return True
+                progress = record.get("progress")
+                if progress is None:
+                    return True
+                previous = next((item for item in reversed(self.queue)
+                                 if item["type"] == "state" and item.get("state") == record["state"]), None)
+                if previous is not None:
+                    previous["progress"] = progress
+                    self.condition.notify_all()
+                    return True
             while len(self.queue) >= limit:
                 state = next((item for item in self.queue if item["type"] == "state"), None)
                 if state is not None:
@@ -84,6 +99,19 @@ class _Session:
     def state(self, state):
         if state in SESSION_STATES and not self.stop_event.is_set():
             self.emit({"type": "state", "state": state})
+
+    def progress(self, value):
+        """Publish only finite, monotonic download percentage updates."""
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+            return
+        with self.condition:
+            if self.stop_event.is_set() or self.last_state != "downloading-model":
+                return
+            progress = min(100, max(0, value))
+            if self.download_progress is not None:
+                progress = max(self.download_progress, progress)
+            self.download_progress = progress
+            self.emit({"type": "state", "state": "downloading-model", "progress": progress})
 
 
 class _AudioFeed:
@@ -159,9 +187,12 @@ class _EventStream:
         self.closed = False
         self.heartbeat_at = time.monotonic() + _HEARTBEAT_SECONDS
         with session.condition:
-            if session.timer is not None:
-                session.timer.cancel()
-                session.timer = None
+            if session.attach_deadline_timer is not None:
+                session.attach_deadline_timer.cancel()
+                session.attach_deadline_timer = None
+            if session.reconnect_timer is not None:
+                session.reconnect_timer.cancel()
+                session.reconnect_timer = None
             session.consumer = self
             session.condition.notify_all()
 
@@ -202,23 +233,25 @@ class _EventStream:
                 return
             session.consumer = None
             if not session.done.is_set():
-                timer = threading.Timer(_GRACE_SECONDS, lambda: self.manager._expire(session, timer))
-                timer.daemon = True
-                session.timer = timer
-                timer.start()
+                session.reconnect_timer = self.manager._new_timer(
+                    _GRACE_SECONDS, self.manager._expire_reconnect, session,
+                )
+                session.reconnect_timer.start()
             session.condition.notify_all()
 
 
 class TranscriptionManager:
     """Keep models lazy and serialize ownership of one transcription session.
 
-    In-flight synchronous model calls cannot be preempted by the engine API.
-    Stop waits a bounded time and retains ownership until the worker exits.
+    A preparation call may outlive a stopped logical session.  The worker
+    publishes the stopped terminal state immediately; the engine owns its
+    construction lock until that detached call completes.
     """
 
-    def __init__(self, engine=None, reader=None):
+    def __init__(self, engine=None, reader=None, timer_factory=None):
         self._engine = engine if engine is not None else WhisperEngine()
         self._reader = reader if reader is not None else FfmpegPcmReader()
+        self._timer_factory = timer_factory or threading.Timer
         self._lock = threading.RLock()
         self._session = None
         self._shutdown = False
@@ -232,7 +265,11 @@ class TranscriptionManager:
             session = _Session(options, manifest_url_factory)
             session.worker = threading.Thread(target=self._run, args=(session,), daemon=True)
             self._session = session
+            session.attach_deadline_timer = self._new_timer(
+                _GRACE_SECONDS, self._expire_initial_attachment, session,
+            )
             session.worker.start()
+            session.attach_deadline_timer.start()
             return session.id
 
     def events(self, session_id):
@@ -249,12 +286,7 @@ class TranscriptionManager:
             with session.condition:
                 if session.stop_event.is_set() or session.done.is_set():
                     return False
-                session.stop_event.set()
-                session.audio_stop.set()
-                if session.timer is not None:
-                    session.timer.cancel()
-                    session.timer = None
-                session.condition.notify_all()
+                self._request_stop_locked(session)
         session.worker.join(_JOIN_SECONDS)
         return True
 
@@ -272,15 +304,82 @@ class TranscriptionManager:
             self.stop(session.id)
             session.worker.join(_JOIN_SECONDS)
 
-    def _expire(self, session, timer):
+    def _new_timer(self, interval, callback, session):
+        """Create an identity-carrying timer safe against stale callbacks."""
+        holder = {}
+
+        def fire():
+            callback(session, holder["timer"])
+
+        timer = self._timer_factory(interval, fire)
+        timer.daemon = True
+        holder["timer"] = timer
+        return timer
+
+    @staticmethod
+    def _request_stop_locked(session):
+        session.stop_event.set()
+        session.audio_stop.set()
+        if session.attach_deadline_timer is not None:
+            session.attach_deadline_timer.cancel()
+            session.attach_deadline_timer = None
+        if session.reconnect_timer is not None:
+            session.reconnect_timer.cancel()
+            session.reconnect_timer = None
+        session.condition.notify_all()
+
+    def _expire_initial_attachment(self, session, timer):
         with session.condition:
-            if session.timer is not timer or session.consumer is not None:
+            if (session.attach_deadline_timer is not timer or session.consumer is not None
+                    or session.done.is_set()):
                 return
-            session.timer = None
-            session.stop_event.set()
-            session.audio_stop.set()
-            session.condition.notify_all()
+            session.attach_deadline_timer = None
+            self._request_stop_locked(session)
         session.worker.join(_JOIN_SECONDS)
+
+    def _expire_reconnect(self, session, timer):
+        with session.condition:
+            if (session.reconnect_timer is not timer or session.consumer is not None
+                    or session.done.is_set()):
+                return
+            session.reconnect_timer = None
+            self._request_stop_locked(session)
+        session.worker.join(_JOIN_SECONDS)
+
+    def _start_preparation(self, session):
+        """Run a potentially blocking prepare call without holding session ownership."""
+        def prepare():
+            try:
+                self._prepare_engine(session)
+            except BaseException as exc:  # A daemon must never leak an exception to stderr.
+                with session.condition:
+                    session.prepare_error = exc
+            finally:
+                with session.condition:
+                    session.prepare_done = True
+                    session.condition.notify_all()
+
+        session.prepare_thread = threading.Thread(target=prepare, daemon=True)
+        session.prepare_thread.start()
+
+    def _prepare_engine(self, session):
+        prepare = self._engine.prepare
+        kwargs = _supported_prepare_keywords(
+            prepare,
+            {"cancel_event": session.stop_event, "on_progress": session.progress},
+        )
+        prepare(session.options, session.state, **kwargs)
+
+    @staticmethod
+    def _wait_for_preparation(session):
+        with session.condition:
+            while not session.prepare_done and not session.stop_event.is_set():
+                session.condition.wait()
+            if session.stop_event.is_set():
+                return False
+            if session.prepare_error is not None:
+                raise session.prepare_error
+            return True
 
     def _run(self, session):
         phase = "model"
@@ -288,11 +387,13 @@ class TranscriptionManager:
         try:
             if session.stop_event.is_set():
                 return
-            self._engine.prepare(session.options, session.state)
-            if session.stop_event.is_set():
+            self._start_preparation(session)
+            if not self._wait_for_preparation(session):
                 return
             phase = "audio"
             session.state("connecting-audio")
+            if session.stop_event.is_set():
+                return
             manifest_url = session.manifest_factory()
             if session.stop_event.is_set():
                 return
@@ -322,7 +423,7 @@ class TranscriptionManager:
                 # The caller's join is bounded; ownership remains with this
                 # worker until its audio pump has actually released resources.
                 frames.thread.join()
-        except Exception as exc:
+        except BaseException as exc:
             if isinstance(exc, TranscriptionSourceError):
                 code = exc.code
             elif phase == "model":
@@ -344,9 +445,12 @@ class TranscriptionManager:
                     final_state, code = "stopped", None
                 elif final_state == "error":
                     session.emit({"type": "error", "code": code, "message": _ERROR_MESSAGES[code]})
-                if session.timer is not None:
-                    session.timer.cancel()
-                    session.timer = None
+                if session.attach_deadline_timer is not None:
+                    session.attach_deadline_timer.cancel()
+                    session.attach_deadline_timer = None
+                if session.reconnect_timer is not None:
+                    session.reconnect_timer.cancel()
+                    session.reconnect_timer = None
                 record = {"type": "ended", "state": final_state}
                 if code is not None:
                     record["code"] = code
@@ -406,3 +510,14 @@ def _normalized(text):
                 normalized.append(value)
                 positions.append(index)
     return "".join(normalized), positions
+
+
+def _supported_prepare_keywords(callback, values):
+    """Call newer engines richly without breaking existing two-argument fakes."""
+    try:
+        parameters = inspect.signature(callback).parameters.values()
+    except (TypeError, ValueError):
+        return {}
+    accepts_any = any(parameter.kind is parameter.VAR_KEYWORD for parameter in parameters)
+    names = {parameter.name for parameter in parameters}
+    return {name: value for name, value in values.items() if accepts_any or name in names}

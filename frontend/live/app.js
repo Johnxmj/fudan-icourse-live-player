@@ -178,7 +178,10 @@ export async function boot({
     const snapshot = transcription.snapshot();
     const course = activeTranscriptionCourse();
     const oldCourse = snapshot.course && course && !sameCourse(snapshot.course, course);
-    if (transcriptionEls.state) transcriptionEls.state.textContent = snapshot.starting ? "启动中" : ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始");
+    const downloadProgress = snapshot.state === "downloading-model" && Number.isFinite(snapshot.progress) ? Math.round(snapshot.progress) : null;
+    if (transcriptionEls.state) transcriptionEls.state.textContent = snapshot.starting ? "启动中" : downloadProgress === null
+      ? ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始")
+      : `下载模型 ${downloadProgress}%`;
     if (transcriptionEls.start) transcriptionEls.start.disabled = !transcriptionAvailable || !course || snapshot.starting || Boolean(snapshot.activeSessionId) || Boolean(oldCourse);
     if (transcriptionEls.stop) transcriptionEls.stop.disabled = !snapshot.activeSessionId;
     if (transcriptionEls.export) transcriptionEls.export.disabled = !snapshot.sessionId;
@@ -193,6 +196,8 @@ export async function boot({
     if (oldCourse) setTranscriptionStatus("上一门课程的转录仍可导出；请先清空后再开始新课程。");
     else if (!transcriptionAvailable) setTranscriptionStatus("实时转录需要已连接且支持转录的本地助手。");
     else if (!course) setTranscriptionStatus("选择课程后可开始转录。");
+    else if (snapshot.state === "downloading-model") setTranscriptionStatus(downloadProgress === null ? "正在下载本地模型…" : `正在下载本地模型：${downloadProgress}%。`);
+    else if (snapshot.state === "listening") setTranscriptionStatus("正在实时转录。");
   };
   const dismissAlert = () => { if (transcriptionEls.alert) { transcriptionEls.alert.hidden = true; transcriptionEls.alert.innerHTML = ""; } };
   const onTranscriptionAlert = (alert) => {
@@ -353,7 +358,7 @@ export async function boot({
     if (!course) { renderTranscription(); return; }
     setTranscriptionStatus("正在启动实时转录…");
     await transcription.start(course);
-    setTranscriptionStatus("正在实时转录。");
+    if (transcription.snapshot().state === "listening") setTranscriptionStatus("正在实时转录。");
   })().catch(error => { setTranscriptionStatus(error?.message || "无法启动实时转录。"); renderTranscription(); }); });
   bind(transcriptionEls.stop, "click", () => { void transcription?.stop().then(() => setTranscriptionStatus("转录已停止，可导出或清空。"), () => setTranscriptionStatus("停止转录失败；请稍后重试。")); });
   bind(transcriptionEls.export, "click", () => { transcription?.exportMarkdown(); });
