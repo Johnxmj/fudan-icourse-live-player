@@ -246,6 +246,9 @@ export function createTranscriptionController({ transport, storage = globalThis.
   let sessionId = null;
   let activeSessionId = null;
   let starting = false;
+  let stopPromise = null;
+  let cancelStart = false;
+  let cancelStartOptions = {};
   let state = "idle";
   let aborter = null;
   let streamPromise = null;
@@ -297,20 +300,33 @@ export function createTranscriptionController({ transport, storage = globalThis.
     async start(nextCourse) {
       if (!nextCourse?.course_id || !nextCourse?.sub_id) throw new TypeError("A live course is required");
       if (activeSessionId || starting) throw new Error("A transcription session is already active");
-      course = { course_id: String(nextCourse.course_id), sub_id: String(nextCourse.sub_id), ...(nextCourse.name ? { name: String(nextCourse.name) } : {}) };
+      const requestedCourse = { course_id: String(nextCourse.course_id), sub_id: String(nextCourse.sub_id), ...(nextCourse.name ? { name: String(nextCourse.name) } : {}) };
+      const previousCourse = course;
+      const previousSessionId = sessionId;
       starting = true;
+      cancelStart = false;
+      cancelStartOptions = {};
       state = "starting";
       emit();
       try {
-        const result = await transport.startTranscription({ course_id: course.course_id, sub_id: course.sub_id, model: settings.model, language: settings.language });
+        const result = await transport.startTranscription({ course_id: requestedCourse.course_id, sub_id: requestedCourse.sub_id, model: settings.model, language: settings.language });
         const nextSessionId = typeof result?.session_id === "string" ? result.session_id.trim() : "";
         if (!nextSessionId) {
-          sessionId = null;
           throw new Error("Transcription session ID missing");
         }
+        course = requestedCourse;
         sessionId = nextSessionId;
         activeSessionId = nextSessionId;
         starting = false;
+        if (cancelStart) {
+          activeSessionId = null;
+          course = previousCourse;
+          sessionId = previousSessionId;
+          state = "stopped";
+          try { await transport.stopTranscription(nextSessionId, cancelStartOptions); }
+          finally { emit(); }
+          return null;
+        }
         aborter = new AbortController();
         streamPromise = transport.streamTranscription(activeSessionId, { signal: aborter.signal, onEvent: receive })
           .catch((error) => { if (error?.name !== "AbortError") { state = "error"; emit(); } });
@@ -319,18 +335,32 @@ export function createTranscriptionController({ transport, storage = globalThis.
       } catch (error) {
         starting = false;
         activeSessionId = null;
-        state = "error";
+        state = cancelStart ? "stopped" : "error";
         emit();
         throw error;
       }
     },
-    async stop() {
+    async stop(options = {}) {
+      if (stopPromise) return stopPromise;
+      if (starting && !activeSessionId) {
+        cancelStart = true;
+        cancelStartOptions = options;
+        emit();
+        return true;
+      }
       if (!activeSessionId) return false;
       const current = activeSessionId;
+      activeSessionId = null;
       aborter?.abort();
-      try { await transport.stopTranscription(current); }
-      finally { activeSessionId = null; aborter = null; state = "stopped"; emit(); }
-      return true;
+      state = "stopped";
+      emit();
+      let stopped;
+      try { stopped = transport.stopTranscription(current, options); }
+      catch (error) { stopped = Promise.reject(error); }
+      stopPromise = Promise.resolve(stopped)
+        .then(() => true)
+        .finally(() => { aborter = null; stopPromise = null; emit(); });
+      return stopPromise;
     },
     async waitForStream() { await streamPromise; },
     clear() {

@@ -239,3 +239,27 @@ test("live route exposes an accessible course rail toggle", () => {
   assert.match(markup, /aria-expanded="false"/);
   assert.match(markup, /<aside[^>]+id="live-course-rail"[^>]+data-open="false"/s);
 });
+
+test("extension-only mode explains that the local helper is required", async () => {
+  const listeners = {};
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: false, innerHTML: "", textContent: "", hidden: false,
+    setAttribute() {}, addEventListener(type, handler) { (listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+  });
+  const state = element();
+  const transcriptionStart = element();
+  const transcriptionStatus = element();
+  const byName = new Map([
+    ["live-state", state], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", transcriptionStart], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", element()], ["transcription-status", transcriptionStatus], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { if (selector === "[data-live-state]") return state; const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
+    extensionFactory: () => ({ name: "extension", probe: async () => true, getState: () => "connected", listLive: async () => [{ course_id: "c1", sub_id: "s1", available_views: ["teacher"] }] }),
+    localFactory: undefined,
+  });
+  assert.equal(transcriptionStart.disabled, true);
+  assert.match(transcriptionStatus.textContent, /本地助手/);
+});

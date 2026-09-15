@@ -55,6 +55,10 @@ class FakeElement {
   pause() {
     this.pauseCalls += 1;
   }
+
+  click() {
+    for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} });
+  }
 }
 
 function createJsonResponse(status, body) {
@@ -92,6 +96,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
   const viewHint = new FakeElement("view-hint");
   const connectionHint = new FakeElement("connection-hint");
   const previewLine = new FakeElement("preview-line");
+  const transcriptionState = new FakeElement("transcription-state");
+  const transcriptionStart = new FakeElement("transcription-start");
+  const transcriptionStop = new FakeElement("transcription-stop");
+  const transcriptionExport = new FakeElement("transcription-export");
+  const transcriptionClear = new FakeElement("transcription-clear");
+  const transcriptionStatus = new FakeElement("transcription-status");
+  const transcriptionAlert = new FakeElement("transcription-alert");
+  const transcriptionLines = new FakeElement("transcription-lines");
+  const transcriptionModel = new FakeElement("transcription-model");
+  const transcriptionLanguage = new FakeElement("transcription-language");
+  const transcriptionKeywords = new FakeElement("transcription-keywords");
+  const transcriptionPage = new FakeElement("transcription-page");
+  const transcriptionSound = new FakeElement("transcription-sound");
+  const transcriptionSystem = new FakeElement("transcription-system");
   const stage = new FakeElement("stage");
 
   const bySelector = {
@@ -112,6 +130,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
     "[data-view-hint]": viewHint,
     "[data-connection-hint]": connectionHint,
     "[data-preview-line]": previewLine,
+    "[data-transcription-state]": transcriptionState,
+    "[data-transcription-start]": transcriptionStart,
+    "[data-transcription-stop]": transcriptionStop,
+    "[data-transcription-export]": transcriptionExport,
+    "[data-transcription-clear]": transcriptionClear,
+    "[data-transcription-status]": transcriptionStatus,
+    "[data-transcription-alert]": transcriptionAlert,
+    "[data-transcription-lines]": transcriptionLines,
+    "[data-transcription-model]": transcriptionModel,
+    "[data-transcription-language]": transcriptionLanguage,
+    "[data-transcription-keywords]": transcriptionKeywords,
+    "[data-transcription-page]": transcriptionPage,
+    "[data-transcription-sound]": transcriptionSound,
+    "[data-transcription-system]": transcriptionSystem,
     "[data-stage]": stage,
   };
 
@@ -164,6 +196,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
       viewHint,
       connectionHint,
       previewLine,
+      transcriptionState,
+      transcriptionStart,
+      transcriptionStop,
+      transcriptionExport,
+      transcriptionClear,
+      transcriptionStatus,
+      transcriptionAlert,
+      transcriptionLines,
+      transcriptionModel,
+      transcriptionLanguage,
+      transcriptionKeywords,
+      transcriptionPage,
+      transcriptionSound,
+      transcriptionSystem,
       stage,
     },
   };
@@ -276,6 +322,39 @@ test("refreshes source after repeated fragment failures", () => {
     nextRecoveryAction({ fragmentFailures: 3, sessionExpired: false }),
     "refresh-source",
   );
+});
+
+test("transcription starts only after the explicit button click", async () => {
+  const course = {
+    course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"],
+  };
+  const requests = createFetchSequence([
+    createJsonResponse(200, [course]),
+    createJsonResponse(200, { enabled: true }),
+    createJsonResponse(200, { session_id: "tx-1" }),
+  ]);
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/live-courses")), "expected catalog load");
+  assert.equal(requests.calls.some((call) => call.url.endsWith("/api/transcription/start")), false);
+  elements.transcriptionStart.click();
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/transcription/start")), "expected explicit transcription start");
+  const start = requests.calls.find((call) => call.url.endsWith("/api/transcription/start"));
+  assert.deepEqual(JSON.parse(start.init.body), { course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
+});
+
+test("transcription start stays disabled when the local helper lacks the capability", async () => {
+  const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
+  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, { enabled: false })]);
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/transcription/capabilities")), "expected capability probe");
+  assert.equal(elements.transcriptionStart.disabled, true);
+  assert.match(elements.transcriptionStatus.textContent, /支持转录的本地助手/);
 });
 
 test("requires login when session has expired", () => {
@@ -458,7 +537,7 @@ test("redeems bootstrap tokens from the URL before loading courses", async () =>
   });
 
   await waitFor(
-    () => transport.calls.length === 2 && api.state.token === "session-token",
+    () => transport.calls.length >= 2 && api.state.token === "session-token",
     "expected the bootstrap token to be exchanged before the catalog request",
   );
 
@@ -606,7 +685,7 @@ test("keeps the redeemed session token when the live catalog fails after bootstr
     "expected the app to surface the catalog failure after bootstrap succeeds",
   );
 
-  assert.equal(transport.calls.length, 2);
+  assert.equal(transport.calls.length, 3);
   assert.equal(api.state.token, "session-token");
   assert.equal(elements.tokenInput.value, "session-token");
   assert.equal(elements.connectionHint.textContent, "已连接本地播放器。");
@@ -683,7 +762,7 @@ test("redeems fragment bootstrap and removes it before the first request", async
       return createJsonResponse(200, url.endsWith("/api/session") ? { token: "session-token" } : []);
     },
   });
-  await waitFor(() => calls.length === 2, "fragment pairing should load the catalog");
+  await waitFor(() => calls.length >= 2, "fragment pairing should load the catalog");
   assert.equal(api.state.token, "session-token");
 });
 
@@ -696,11 +775,11 @@ test("media authorization failure refreshes the short-lived media token without 
   const api = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
   await waitFor(() => FakeHls.instances.length === 1, "initial playback");
   await FakeHls.instances[0].emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
-  assert.equal(requests.calls.length, 2);
+  assert.equal(requests.calls.length, 3);
   assert.equal(api.state.recovery.sessionExpired, false);
   assert.match(FakeHls.instances.at(-1).sources[0], /fresh-media/);
   await FakeHls.instances.at(-1).emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
-  assert.equal(requests.calls.length, 2, "auth recovery must be bounded");
+  assert.equal(requests.calls.length, 3, "auth recovery must be bounded");
 });
 
 test("catalog authorization failure clears stale playback and requires reconnecting", async () => {

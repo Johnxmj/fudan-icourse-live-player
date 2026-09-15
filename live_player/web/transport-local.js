@@ -110,10 +110,11 @@ export function createLocalTransport(baseUrl, token, options = {}) {
     return response.text();
   }
 
-  async function postJson(path, payload) {
+  async function postJson(path, payload, init = {}) {
     return requestJson(path, {
+      ...init,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { ...init.headers, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   }
@@ -141,8 +142,8 @@ export function createLocalTransport(baseUrl, token, options = {}) {
       });
       return parseSseStream(response.body, { signal, onEvent });
     },
-    stopTranscription(sessionId) {
-      return postJson("/api/transcription/stop", { session_id: sessionId });
+    stopTranscription(sessionId, { keepalive = false } = {}) {
+      return postJson("/api/transcription/stop", { session_id: sessionId }, { keepalive });
     },
     manifestUrl(courseId, subId, view, mediaToken = "") {
       const url = joinUrl(base, `/media/${encodeURIComponent(courseId)}/${encodeURIComponent(subId)}/${encodeURIComponent(view)}/manifest.m3u8`);

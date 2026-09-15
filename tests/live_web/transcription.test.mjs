@@ -145,6 +145,65 @@ test("controller retains the completed session ID for Markdown export after stop
   assert.match(markdown, /转录会话：tx-keep/);
 });
 
+test("explicit stop aborts the stream and forwards keepalive shutdown options", async () => {
+  let signal;
+  const stops = [];
+  const transport = {
+    startTranscription: async () => ({ session_id: "tx-stop" }),
+    streamTranscription: async (_sessionId, options) => {
+      signal = options.signal;
+      await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+    },
+    stopTranscription: async (sessionId, options) => { stops.push({ sessionId, options }); },
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "37142", sub_id: "659200" });
+  await controller.stop({ keepalive: true });
+
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(stops, [{ sessionId: "tx-stop", options: { keepalive: true } }]);
+  assert.equal(controller.snapshot().activeSessionId, null);
+});
+
+test("concurrent stop requests share one remote shutdown", async () => {
+  let releaseStop;
+  let stopCalls = 0;
+  const transport = {
+    startTranscription: async () => ({ session_id: "tx-once" }),
+    streamTranscription: async () => {},
+    stopTranscription: () => {
+      stopCalls += 1;
+      return new Promise(resolve => { releaseStop = resolve; });
+    },
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "37142", sub_id: "659200" });
+  const first = controller.stop();
+  const second = controller.stop();
+  assert.equal(stopCalls, 1);
+  releaseStop();
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
+});
+
+test("stopping while a start is pending tears down the late session without relabeling a record", async () => {
+  let resolveStart;
+  const stops = [];
+  const transport = {
+    startTranscription: () => new Promise(resolve => { resolveStart = resolve; }),
+    streamTranscription: async () => assert.fail("cancelled starts must not open a transcript stream"),
+    stopTranscription: async (sessionId, options) => { stops.push({ sessionId, options }); },
+  };
+  const controller = createTranscriptionController({ transport });
+  const start = controller.start({ course_id: "old", sub_id: "session", name: "旧课程" });
+  await controller.stop({ keepalive: true });
+  resolveStart({ session_id: "tx-late" });
+
+  assert.equal(await start, null);
+  assert.deepEqual(stops, [{ sessionId: "tx-late", options: { keepalive: true } }]);
+  assert.equal(controller.snapshot().course, null);
+  assert.equal(controller.snapshot().sessionId, null);
+});
+
 test("controller synchronously locks concurrent starts until the first start resolves", async () => {
   let resolveStart;
   let starts = 0;
@@ -186,6 +245,31 @@ test("failed and malformed starts clear the starting guard and allow retry", asy
   assert.equal(controller.snapshot().activeSessionId, null);
   assert.equal(controller.snapshot().sessionId, null);
   assert.equal(await controller.start(course), "tx-retry");
+});
+
+test("a failed start for a new course does not relabel an exportable old transcript", async () => {
+  let starts = 0;
+  const transport = {
+    startTranscription: async () => {
+      starts += 1;
+      if (starts === 2) throw new Error("helper unavailable");
+      return { session_id: "tx-old" };
+    },
+    streamTranscription: async (_sessionId, { onEvent }) => {
+      onEvent({ type: "segment", start: 1, end: 2, text: "旧课程内容" });
+    },
+    stopTranscription: async () => ({}),
+  };
+  const controller = createTranscriptionController({ transport });
+  await controller.start({ course_id: "old", sub_id: "one", name: "旧课程" });
+  await controller.waitForStream();
+  await controller.stop();
+
+  await assert.rejects(controller.start({ course_id: "new", sub_id: "two", name: "新课程" }), /helper unavailable/);
+  const markdown = controller.exportMarkdown({ download: false });
+  assert.match(markdown, /课程：旧课程/);
+  assert.match(markdown, /课程 ID：old/);
+  assert.match(markdown, /旧课程内容/);
 });
 
 test("controller stores normalized segment display text and exports the same normalized text", async () => {

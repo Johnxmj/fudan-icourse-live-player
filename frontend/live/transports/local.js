@@ -87,9 +87,10 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
     await connect;
     return (await request(path, init)).json();
   };
-  const postJson = (path, payload) => requestJson(path, {
+  const postJson = (path, payload, init = {}) => requestJson(path, {
+    ...init,
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...init.headers, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   return {
@@ -109,7 +110,7 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
       });
       return parseSseStream(response.body, { signal, onEvent });
     },
-    stopTranscription: (sessionId) => postJson("/api/transcription/stop", { session_id: sessionId }),
+    stopTranscription: (sessionId, { keepalive = false } = {}) => postJson("/api/transcription/stop", { session_id: sessionId }, { keepalive }),
     manifestUrl(courseId, subId, view, mediaToken = "") { const url = new URL(`/media/${encodeURIComponent(courseId)}/${encodeURIComponent(subId)}/${encodeURIComponent(view)}/manifest.m3u8`, baseUrl); if (mediaToken) url.searchParams.set("media_token", mediaToken); return url.toString(); },
     segmentUrl(segmentToken, mediaToken = "") { const url = new URL(`/media/segment/${encodeURIComponent(segmentToken)}`, baseUrl); if (mediaToken) url.searchParams.set("media_token", mediaToken); return url.toString(); },
     getState: () => state,

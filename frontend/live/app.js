@@ -3,6 +3,7 @@
 import { createExtensionTransport } from "./transports/extension.js";
 import { createLocalTransport } from "./transports/local.js";
 import { mountLocalPlayer } from "./player.js";
+import { createTranscriptionController } from "./transcription.js";
 import { FUDAN_EXTENSION_ID as APPROVED_EXTENSION_ID } from "./extension-config.js";
 
 export const LIVE_STATES = Object.freeze([
@@ -140,6 +141,9 @@ export async function boot({
   const refreshButton = find("refresh");
   const rail = find("course-rail");
   const railToggle = find("rail-toggle");
+  const transcriptionEls = {
+    state: find("transcription-state"), start: find("transcription-start"), stop: find("transcription-stop"), export: find("transcription-export"), clear: find("transcription-clear"), status: find("transcription-status"), alert: find("transcription-alert"), lines: find("transcription-lines"), model: find("transcription-model"), language: find("transcription-language"), keywords: find("transcription-keywords"), page: find("transcription-page"), sound: find("transcription-sound"), system: find("transcription-system"),
+  };
   const unbindRail = bindRailToggle(railToggle, rail);
   let transport = null;
   let courses = [];
@@ -149,11 +153,61 @@ export async function boot({
   let refreshing = false;
   let disposed = false;
   let recoveryAttempts = 0;
+  let transcription = null;
+  let transcriptionAvailable = false;
+  let transcriptionStatus = "选择课程后可开始转录。";
   const bindings = [];
   const bind = (element, event, handler) => {
     element?.addEventListener?.(event, handler);
     bindings.push(() => element?.removeEventListener?.(event, handler));
   };
+  const activeTranscriptionCourse = () => activeCourse && ({ course_id: activeCourse.course_id, sub_id: activeCourse.sub_id, name: activeCourse.course_title || activeCourse.sub_title || "直播课程" });
+  const sameCourse = (left, right) => left && right && String(left.course_id) === String(right.course_id) && String(left.sub_id) === String(right.sub_id);
+  const setTranscriptionStatus = (text) => { transcriptionStatus = text; if (transcriptionEls.status) transcriptionEls.status.textContent = text; };
+  const beep = () => {
+    const AudioContext = windowRef?.AudioContext || windowRef?.webkitAudioContext;
+    if (!AudioContext) return;
+    try { const context = new AudioContext(); const oscillator = context.createOscillator(); const gain = context.createGain(); oscillator.frequency.value = 880; gain.gain.setValueAtTime(.08, context.currentTime); gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .16); oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .16); } catch (_) {}
+  };
+  const renderTranscription = () => {
+    if (!transcription) {
+      if (transcriptionEls.start) transcriptionEls.start.disabled = transport?.name !== "local" || !activeCourse;
+      if (transport?.name === "extension") setTranscriptionStatus("实时转录需要本地助手；浏览器扩展仅支持播放。");
+      return;
+    }
+    const snapshot = transcription.snapshot();
+    const course = activeTranscriptionCourse();
+    const oldCourse = snapshot.course && course && !sameCourse(snapshot.course, course);
+    if (transcriptionEls.state) transcriptionEls.state.textContent = snapshot.starting ? "启动中" : ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始");
+    if (transcriptionEls.start) transcriptionEls.start.disabled = !transcriptionAvailable || !course || snapshot.starting || Boolean(snapshot.activeSessionId) || Boolean(oldCourse);
+    if (transcriptionEls.stop) transcriptionEls.stop.disabled = !snapshot.activeSessionId;
+    if (transcriptionEls.export) transcriptionEls.export.disabled = !snapshot.sessionId;
+    if (transcriptionEls.clear) transcriptionEls.clear.disabled = Boolean(snapshot.activeSessionId) || !snapshot.sessionId;
+    if (transcriptionEls.model) transcriptionEls.model.value = snapshot.settings.model;
+    if (transcriptionEls.language) transcriptionEls.language.value = snapshot.settings.language;
+    if (transcriptionEls.keywords) transcriptionEls.keywords.value = snapshot.settings.keywords.join(", ");
+    if (transcriptionEls.page) transcriptionEls.page.checked = snapshot.settings.pageAlert;
+    if (transcriptionEls.sound) transcriptionEls.sound.checked = snapshot.settings.soundAlert;
+    if (transcriptionEls.system) transcriptionEls.system.checked = snapshot.settings.systemAlert;
+    if (transcriptionEls.lines) transcriptionEls.lines.innerHTML = snapshot.transcript.map(line => `<li${line.keywords.length ? ' class="is-alert"' : ""}><span class="transcription-time">${new Date(line.start * 1000).toISOString().slice(11, 19)}</span>${escapeHtml(line.text)}</li>`).join("");
+    if (oldCourse) setTranscriptionStatus("上一门课程的转录仍可导出；请先清空后再开始新课程。");
+    else if (!transcriptionAvailable) setTranscriptionStatus("实时转录需要已连接且支持转录的本地助手。");
+    else if (!course) setTranscriptionStatus("选择课程后可开始转录。");
+  };
+  const dismissAlert = () => { if (transcriptionEls.alert) { transcriptionEls.alert.hidden = true; transcriptionEls.alert.innerHTML = ""; } };
+  const onTranscriptionAlert = (alert) => {
+    if (alert.settings.pageAlert && transcriptionEls.alert) { transcriptionEls.alert.hidden = false; transcriptionEls.alert.innerHTML = `<span>⚠ 提醒 ${escapeHtml(alert.keyword)} · ${new Date(alert.timestamp * 1000).toISOString().slice(11, 19)}</span><button type="button" data-transcription-dismiss>关闭</button>`; }
+    if (alert.settings.soundAlert) beep();
+    const NotificationApi = windowRef?.Notification || globalThis.Notification;
+    if (alert.settings.systemAlert && NotificationApi?.permission === "granted") { try { new NotificationApi(`课堂提醒：${alert.keyword}`, { body: alert.text, tag: `fudan-live-${alert.keyword}` }); } catch (_) {} }
+  };
+  const mountTranscription = async () => {
+    if (transcription || transport?.name !== "local") { renderTranscription(); return; }
+    transcription = createTranscriptionController({ transport, storage: windowRef?.localStorage, onUpdate: renderTranscription, onAlert: onTranscriptionAlert });
+    try { const capabilities = await transcription.transcriptionCapabilities(); transcriptionAvailable = capabilities?.enabled !== false; } catch (_) { transcriptionAvailable = false; }
+    renderTranscription();
+  };
+  const stopForCourseChange = () => { if (transcription?.snapshot().activeSessionId) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。")); };
   const show = (value, message = "") => {
     if (disposed) return;
     mountState(state, value, { windowRef });
@@ -180,6 +234,7 @@ export async function boot({
     const meta = find("course-meta");
     if (meta) meta.textContent = [activeCourse?.teacher, activeCourse?.room, activeCourse?.sub_title].filter(Boolean).join(" · ");
     if (viewBar) viewBar.innerHTML = viewsFor(activeCourse).map(view => `<button type="button" data-view="${view}" aria-pressed="${view === selectedView}">${VIEW_LABELS[view]}</button>`).join("");
+    renderTranscription();
   };
   const recover = async () => {
     if (recoveryAttempts++ >= 1) {
@@ -205,6 +260,7 @@ export async function boot({
   async function selectCourse(courseId, subId) {
     const course = courses.find(item => String(item.course_id) === String(courseId) && (subId === undefined || String(item.sub_id) === String(subId)));
     if (!course || disposed) return;
+    if (transcription && !sameCourse(activeTranscriptionCourse(), course)) stopForCourseChange();
     activeCourse = course;
     const views = viewsFor(course);
     selectedView = views.includes("teacher") ? "teacher" : views[0] || "";
@@ -247,8 +303,10 @@ export async function boot({
         courses = []; activeCourse = null; clearPlayer(); render(); show(nextState); return;
       }
       const previous = activeCourse;
+      if (transcription && previous && !courses.some(course => sameCourse(course, previous))) stopForCourseChange();
       activeCourse = courses.find(course => course.course_id === previous?.course_id && course.sub_id === previous?.sub_id) || null;
       render();
+      await mountTranscription();
       if (activeCourse) {
         if (!viewsFor(activeCourse).includes(selectedView)) selectedView = viewsFor(activeCourse)[0] || "";
         render(); startPlayer();
@@ -283,6 +341,29 @@ export async function boot({
   bind(list, "click", event => { const button = event.target.closest?.("[data-course-id]"); if (button) void selectCourse(button.dataset.courseId, button.dataset.subId); });
   bind(viewBar, "click", event => { const button = event.target.closest?.("[data-view]"); if (button) void selectView(button.dataset.view); });
   bind(refreshButton, "click", () => { void refresh(); });
+  bind(transcriptionEls.start, "click", () => { void (async () => {
+    const preflightSettings = transcription?.settings();
+    const NotificationApi = windowRef?.Notification || globalThis.Notification;
+    if ((preflightSettings?.systemAlert ?? transcriptionEls.system?.checked !== false) && NotificationApi?.permission === "default" && typeof NotificationApi.requestPermission === "function") {
+      Promise.resolve(NotificationApi.requestPermission()).then(permission => { if (permission !== "granted") setTranscriptionStatus("系统通知未获授权；页面和声音提醒仍可用。"); }).catch(() => setTranscriptionStatus("系统通知不可用；页面和声音提醒仍可用。"));
+    }
+    await mountTranscription();
+    if (!transcription || !transcriptionAvailable) { setTranscriptionStatus(transport?.name === "extension" ? "实时转录需要本地助手；浏览器扩展仅支持播放。" : "实时转录需要已连接且支持转录的本地助手。"); return; }
+    const course = activeTranscriptionCourse();
+    if (!course) { renderTranscription(); return; }
+    setTranscriptionStatus("正在启动实时转录…");
+    await transcription.start(course);
+    setTranscriptionStatus("正在实时转录。");
+  })().catch(error => { setTranscriptionStatus(error?.message || "无法启动实时转录。"); renderTranscription(); }); });
+  bind(transcriptionEls.stop, "click", () => { void transcription?.stop().then(() => setTranscriptionStatus("转录已停止，可导出或清空。"), () => setTranscriptionStatus("停止转录失败；请稍后重试。")); });
+  bind(transcriptionEls.export, "click", () => { transcription?.exportMarkdown(); });
+  bind(transcriptionEls.clear, "click", () => { try { transcription?.clear(); dismissAlert(); setTranscriptionStatus("转录记录已清空。"); } catch (error) { setTranscriptionStatus(error?.message || "请先停止转录。"); } });
+  bind(transcriptionEls.alert, "click", event => { if (event.target.closest?.("[data-transcription-dismiss]")) dismissAlert(); });
+  const updateTranscriptionSettings = () => {
+    if (!transcription) return;
+    transcription.updateSettings({ model: transcriptionEls.model?.value, language: transcriptionEls.language?.value, keywords: String(transcriptionEls.keywords?.value || "").split(/[,，]/u), pageAlert: Boolean(transcriptionEls.page?.checked), soundAlert: Boolean(transcriptionEls.sound?.checked), systemAlert: Boolean(transcriptionEls.system?.checked) });
+  };
+  [transcriptionEls.model, transcriptionEls.language, transcriptionEls.keywords, transcriptionEls.page, transcriptionEls.sound, transcriptionEls.system].forEach(element => bind(element, "change", updateTranscriptionSettings));
   bind(find("fullscreen"), "click", () => {
     if (documentRef.fullscreenElement) documentRef.exitFullscreen?.().catch?.(() => {});
     else find("stage")?.requestFullscreen?.().catch?.(() => {});
@@ -290,7 +371,7 @@ export async function boot({
   const api = {
     selectCourse, selectView, refresh,
     get activeCourse() { return activeCourse; },
-    destroy() { disposed = true; clearPlayer(); adapters.forEach(adapter => adapter.dispose?.()); unbindRail(); bindings.forEach(unbind => unbind()); },
+    destroy() { disposed = true; void transcription?.stop({ keepalive: true }); clearPlayer(); adapters.forEach(adapter => adapter.dispose?.()); unbindRail(); bindings.forEach(unbind => unbind()); },
   };
   bind(windowRef, "pagehide", () => api.destroy());
   show("detecting");

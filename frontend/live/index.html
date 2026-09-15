@@ -26,6 +26,29 @@
       <div data-live-state aria-live="polite"></div>
       <div class="player-host" data-player hidden></div>
       <div class="view-bar" data-view-bar aria-label="画面与音频"></div>
+      <aside class="transcription-panel" data-transcription-panel aria-label="实时转录">
+        <header><h2>实时转录</h2><span data-transcription-state>未开始</span></header>
+        <div class="transcription-actions">
+          <button type="button" data-transcription-start disabled>开始转录</button>
+          <button type="button" data-transcription-stop disabled>停止</button>
+          <button type="button" data-transcription-export disabled>导出 Markdown</button>
+          <button type="button" data-transcription-clear disabled>清空</button>
+        </div>
+        <p data-transcription-status aria-live="polite">选择课程后可开始转录。</p>
+        <div data-transcription-alert role="status" aria-live="assertive" hidden></div>
+        <ol data-transcription-lines aria-label="实时字幕"></ol>
+        <details data-transcription-settings>
+          <summary>转录与提醒设置</summary>
+          <div class="transcription-settings__fields">
+            <label>模型 <select data-transcription-model><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option></select></label>
+            <label>语言 <select data-transcription-language><option value="zh">中文</option><option value="auto">自动检测</option></select></label>
+            <label class="transcription-settings__keywords">提醒关键词（以逗号分隔）<input data-transcription-keywords type="text"></label>
+            <label><input data-transcription-page type="checkbox" checked> 页面提醒</label>
+            <label><input data-transcription-sound type="checkbox" checked> 声音提醒</label>
+            <label><input data-transcription-system type="checkbox" checked> 系统通知</label>
+          </div>
+        </details>
+      </aside>
     </section>
   </main>
   <script src="./vendor/hls.min.js"></script>
