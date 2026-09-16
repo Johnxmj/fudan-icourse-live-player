@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest.mock import Mock, patch
 
@@ -5,6 +6,34 @@ from live_player import cli
 
 
 class InteractiveLauncherTest(unittest.TestCase):
+    def test_main_uses_ascii_fallback_when_stdout_cannot_encode_status(self):
+        env = {"StuId": "student", "UISPsw": "secret", "COURSE_IDS": "1"}
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        try:
+            with patch("live_player.cli.sys.stdout", stream), \
+                    patch("live_player.cli.launch_player"):
+                self.assertEqual(cli.main(["--port", "4310"], env=env), 0)
+            stream.flush()
+            output = stream.buffer.getvalue().decode("cp1252")
+        finally:
+            stream.close()
+        self.assertIn("Player will open in your browser.", output)
+        self.assertNotIn("播放器", output)
+        self.assertNotIn("Traceback", output)
+
+    def test_main_preserves_chinese_status_when_stdout_supports_utf8(self):
+        env = {"StuId": "student", "UISPsw": "secret", "COURSE_IDS": "1"}
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        try:
+            with patch("live_player.cli.sys.stdout", stream), \
+                    patch("live_player.cli.launch_player"):
+                self.assertEqual(cli.main(["--port", "4310"], env=env), 0)
+            stream.flush()
+            output = stream.buffer.getvalue().decode("utf-8")
+        finally:
+            stream.close()
+        self.assertIn("播放器将在浏览器中打开", output)
+
     def test_main_passes_only_valid_explicit_loopback_ports_to_launcher(self):
         env = {"StuId": "student", "UISPsw": "secret", "COURSE_IDS": "1"}
         with patch("live_player.cli.launch_player") as launch:

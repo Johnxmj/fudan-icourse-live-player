@@ -35,6 +35,14 @@ def _env_value(env, name: str) -> str:
     return value.strip() if isinstance(value, str) else str(value).strip()
 
 
+def _print_user_message(message: str, *, fallback: str, file=None) -> None:
+    stream = sys.stdout if file is None else file
+    try:
+        print(message, file=stream)
+    except UnicodeEncodeError:
+        print(fallback, file=stream)
+
+
 def _create_client(student_id: str, password: str) -> ICourseClient:
     vpn = WebVPNSession()
     vpn.login(student_id, password)
@@ -275,9 +283,16 @@ def main(argv=None, env=None) -> int:
                 saved = load_course_selection()
                 if saved:
                     values["COURSE_IDS"] = ",".join(saved)
-                    print(f"已读取保存的 {len(saved)} 门课程。需要调整时使用 --select-courses。")
+                    _print_user_message(
+                        f"已读取保存的 {len(saved)} 门课程。需要调整时使用 --select-courses。",
+                        fallback=f"Loaded {len(saved)} saved course(s). Use --select-courses to adjust.",
+                    )
             except (OSError, ValueError):
-                print("已保存的课程选择无法读取，本次将重新选择课程。", file=sys.stderr)
+                _print_user_message(
+                    "已保存的课程选择无法读取，本次将重新选择课程。",
+                    fallback="Saved course selection could not be read; selecting courses again.",
+                    file=sys.stderr,
+                )
         if args.interactive or args.select_courses:
             values = prompt_environment(values)
             if args.select_courses or not _env_value(values, "COURSE_IDS"):
@@ -288,7 +303,11 @@ def main(argv=None, env=None) -> int:
                     cached_catalog = load_course_catalog()
                 except (OSError, ValueError):
                     cached_catalog = None
-                    print("已保存的课程目录不完整，本次将重新读取官方目录。", file=sys.stderr)
+                    _print_user_message(
+                        "已保存的课程目录不完整，本次将重新读取官方目录。",
+                        fallback="Saved course catalog is incomplete; reading the official catalog again.",
+                        file=sys.stderr,
+                    )
                 if cached_catalog is not None:
                     ids = select_courses(catalog=cached_catalog)
                 else:
@@ -298,18 +317,33 @@ def main(argv=None, env=None) -> int:
                 try:
                     save_course_selection(ids)
                 except OSError:
-                    print("课程已选好，但当前目录无法保存选择；下次启动需要重新选择。", file=sys.stderr)
+                    _print_user_message(
+                        "课程已选好，但当前目录无法保存选择；下次启动需要重新选择。",
+                        fallback="Courses selected, but the selection could not be saved; choose them again next time.",
+                        file=sys.stderr,
+                    )
         # Create the one-use bootstrap only after the interactive selection ends.
         config = build_application(values, session_manager=session_manager, port=args.port)
     except (ValueError, EOFError):
-        print("尚未配置登录信息。请使用 --interactive 按提示启动，或设置 StuId / UISPsw。", file=sys.stderr)
+        _print_user_message(
+            "尚未配置登录信息。请使用 --interactive 按提示启动，或设置 StuId / UISPsw。",
+            fallback="Login is not configured. Use --interactive or set StuId / UISPsw.",
+            file=sys.stderr,
+        )
         return 2
     except KeyboardInterrupt:
         return 130
     except RuntimeError:
-        print("官方课程目录暂时无法读取。请检查账号、校园网或 WebVPN 后重试。", file=sys.stderr)
+        _print_user_message(
+            "官方课程目录暂时无法读取。请检查账号、校园网或 WebVPN 后重试。",
+            fallback="Official course catalog unavailable. Check credentials, campus network, or WebVPN and try again.",
+            file=sys.stderr,
+        )
         return 1
-    print("播放器将在浏览器中打开。关闭此窗口或按 Ctrl+C 可停止本地助手。")
+    _print_user_message(
+        "播放器将在浏览器中打开。关闭此窗口或按 Ctrl+C 可停止本地助手。",
+        fallback="Player will open in your browser. Close this window or press Ctrl+C to stop the local helper.",
+    )
     launch_player(config, pages=args.pages)
     return 0
 
