@@ -42,6 +42,13 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(config.port, 0)
         self.assertEqual(config.application.course_ids, ("1", "2"))
 
+    def test_server_accepts_only_valid_loopback_port_range(self):
+        env = {"StuId": "user", "UISPsw": "pass"}
+        self.assertEqual(build_application(env, port=4310).port, 4310)
+        for port in (-1, 65536, True, "4310"):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                build_application(env, port=port)
+
     def test_missing_credentials_returns_configuration_error(self):
         with self.assertRaisesRegex(ValueError, "StuId and UISPsw"):
             build_application({})

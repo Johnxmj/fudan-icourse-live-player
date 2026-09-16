@@ -1,4 +1,5 @@
 import { createLocalTransport } from "./transport-local.js";
+import { createTranscriptionController } from "./transcription.js";
 
 const VIEW_LABELS = { teacher: "教师画面", student: "学生画面", teacher_audio: "教师音频", student_audio: "学生音频" };
 
@@ -260,6 +261,20 @@ export function mountLivePlayerApp(options = {}) {
     viewHint: root.querySelector("[data-view-hint]"),
     connectionHint: root.querySelector("[data-connection-hint]"),
     previewLine: root.querySelector("[data-preview-line]"),
+    transcriptionState: root.querySelector("[data-transcription-state]"),
+    transcriptionStart: root.querySelector("[data-transcription-start]"),
+    transcriptionStop: root.querySelector("[data-transcription-stop]"),
+    transcriptionExport: root.querySelector("[data-transcription-export]"),
+    transcriptionClear: root.querySelector("[data-transcription-clear]"),
+    transcriptionStatus: root.querySelector("[data-transcription-status]"),
+    transcriptionAlert: root.querySelector("[data-transcription-alert]"),
+    transcriptionLines: root.querySelector("[data-transcription-lines]"),
+    transcriptionModel: root.querySelector("[data-transcription-model]"),
+    transcriptionLanguage: root.querySelector("[data-transcription-language]"),
+    transcriptionKeywords: root.querySelector("[data-transcription-keywords]"),
+    transcriptionPage: root.querySelector("[data-transcription-page]"),
+    transcriptionSound: root.querySelector("[data-transcription-sound]"),
+    transcriptionSystem: root.querySelector("[data-transcription-system]"),
   };
 
   const state = createEmptyState();
@@ -272,6 +287,97 @@ export function mountLivePlayerApp(options = {}) {
   let transport = createLocalTransport(state.baseUrl, state.token, { fetchImpl });
   let hls = null;
   let loadGeneration = 0;
+  let transcription = null;
+  let transcriptionAvailable = false;
+  let transcriptionStatus = "选择课程后可开始转录。";
+
+  const activeTranscriptionCourse = () => state.activeCourse && ({
+    course_id: state.activeCourse.course_id,
+    sub_id: state.activeCourse.sub_id,
+    name: courseLabel(state.activeCourse),
+  });
+  const sameCourse = (left, right) => left && right && String(left.course_id) === String(right.course_id) && String(left.sub_id) === String(right.sub_id);
+  const setTranscriptionStatus = (text) => {
+    transcriptionStatus = text;
+    if (els.transcriptionStatus) els.transcriptionStatus.textContent = text;
+  };
+  const beep = () => {
+    const AudioContext = win.AudioContext || win.webkitAudioContext;
+    if (!AudioContext) return;
+    try {
+      const context = new AudioContext();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 880;
+      gain.gain.setValueAtTime(.08, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .16);
+      oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .16);
+    } catch { /* Sound alerts are optional. */ }
+  };
+  const requestNotificationPermission = () => {
+    const NotificationApi = win.Notification || globalThis.Notification;
+    if (!NotificationApi || NotificationApi.permission !== "default" || typeof NotificationApi.requestPermission !== "function") return;
+    Promise.resolve(NotificationApi.requestPermission()).then((permission) => {
+      if (permission !== "granted") setTranscriptionStatus("系统通知未获授权；页面和声音提醒仍可用。");
+    }).catch(() => setTranscriptionStatus("系统通知不可用；页面和声音提醒仍可用。"));
+  };
+  const renderTranscription = () => {
+    if (!transcription) {
+      if (els.transcriptionStart) els.transcriptionStart.disabled = !state.activeCourse || !state.token;
+      return;
+    }
+    const snapshot = transcription.snapshot();
+    const activeCourse = activeTranscriptionCourse();
+    const oldCourse = snapshot.course && activeCourse && !sameCourse(snapshot.course, activeCourse);
+    const downloadProgress = snapshot.state === "downloading-model" && Number.isFinite(snapshot.progress)
+      ? Math.round(snapshot.progress)
+      : null;
+    if (els.transcriptionState) els.transcriptionState.textContent = snapshot.starting ? "启动中" : downloadProgress === null
+      ? ({ idle: "未开始", stopped: "已停止", listening: "转录中", error: "出错" }[snapshot.state] || snapshot.state || "未开始")
+      : `下载模型 ${downloadProgress}%`;
+    if (els.transcriptionStart) els.transcriptionStart.disabled = !transcriptionAvailable || !activeCourse || snapshot.starting || Boolean(snapshot.activeSessionId) || Boolean(oldCourse);
+    if (els.transcriptionStop) els.transcriptionStop.disabled = !snapshot.activeSessionId;
+    if (els.transcriptionExport) els.transcriptionExport.disabled = !snapshot.sessionId;
+    if (els.transcriptionClear) els.transcriptionClear.disabled = Boolean(snapshot.activeSessionId) || !snapshot.sessionId;
+    if (els.transcriptionModel) els.transcriptionModel.value = snapshot.settings.model;
+    if (els.transcriptionLanguage) els.transcriptionLanguage.value = snapshot.settings.language;
+    if (els.transcriptionKeywords) els.transcriptionKeywords.value = snapshot.settings.keywords.join(", ");
+    if (els.transcriptionPage) els.transcriptionPage.checked = snapshot.settings.pageAlert;
+    if (els.transcriptionSound) els.transcriptionSound.checked = snapshot.settings.soundAlert;
+    if (els.transcriptionSystem) els.transcriptionSystem.checked = snapshot.settings.systemAlert;
+    if (els.transcriptionLines) els.transcriptionLines.innerHTML = snapshot.transcript.map((line) => `<li${line.keywords.length ? ' class="is-alert"' : ""}><span class="transcription-time">${escapeHtml(new Date(line.start * 1000).toISOString().slice(11, 19))}</span>${escapeHtml(line.text)}</li>`).join("");
+    if (oldCourse) setTranscriptionStatus("上一门课程的转录仍可导出；请先清空后再开始新课程。");
+    else if (!transcriptionAvailable) setTranscriptionStatus("实时转录需要已连接且支持转录的本地助手。");
+    else if (!activeCourse) setTranscriptionStatus("选择课程后可开始转录。");
+    else if (snapshot.state === "downloading-model") setTranscriptionStatus(downloadProgress === null ? "正在下载本地模型…" : `正在下载本地模型：${downloadProgress}%。`);
+    else if (snapshot.state === "listening") setTranscriptionStatus("正在实时转录。");
+    else if (!snapshot.activeSessionId && !snapshot.starting && !oldCourse && !transcriptionStatus) setTranscriptionStatus("可开始实时转录。");
+  };
+  const dismissAlert = () => { if (els.transcriptionAlert) { els.transcriptionAlert.hidden = true; els.transcriptionAlert.innerHTML = ""; } };
+  const onTranscriptionAlert = (alert) => {
+    if (alert.settings.pageAlert && els.transcriptionAlert) {
+      els.transcriptionAlert.hidden = false;
+      els.transcriptionAlert.innerHTML = `<span>⚠ 提醒 ${escapeHtml(alert.keyword)} · ${escapeHtml(new Date(alert.timestamp * 1000).toISOString().slice(11, 19))}</span><button type="button" data-transcription-dismiss>关闭</button>`;
+    }
+    if (alert.settings.soundAlert) beep();
+    const NotificationApi = win.Notification || globalThis.Notification;
+    if (alert.settings.systemAlert && NotificationApi?.permission === "granted") {
+      try { new NotificationApi(`课堂提醒：${alert.keyword}`, { body: alert.text, tag: `fudan-live-${alert.keyword}` }); } catch { /* Page alerts remain available. */ }
+    }
+  };
+  const mountTranscription = async () => {
+    if (transcription || !state.token) { renderTranscription(); return; }
+    transcription = createTranscriptionController({ transport, storage, onUpdate: renderTranscription, onAlert: onTranscriptionAlert });
+    try {
+      const capabilities = await transcription.transcriptionCapabilities();
+      transcriptionAvailable = capabilities?.available === true;
+    } catch { transcriptionAvailable = false; }
+    renderTranscription();
+  };
+  const stopForCourseChange = () => {
+    const snapshot = transcription?.snapshot();
+    if (snapshot?.activeSessionId || snapshot?.starting) void transcription.stop().catch(() => setTranscriptionStatus("停止转录失败；请稍后重试。"));
+  };
 
   function setStatus(text, tone = "muted") {
     state.statusText = text;
@@ -349,6 +455,7 @@ export function mountLivePlayerApp(options = {}) {
   }
 
   function setActiveCourse(course, preferredView = "") {
+    if (transcription && !sameCourse(activeTranscriptionCourse(), course)) stopForCourseChange();
     state.activeCourse = course || null;
     state.selectedCourseId = course ? String(course.course_id) : "";
     const availableViews = Array.isArray(course?.available_views) ? course.available_views.map(String) : [];
@@ -363,6 +470,7 @@ export function mountLivePlayerApp(options = {}) {
       ? transport.manifestUrl(course.course_id, course.sub_id, state.selectedView, mediaToken)
       : "";
     renderAll();
+    renderTranscription();
   }
 
   function renderStatus() {
@@ -640,6 +748,7 @@ export function mountLivePlayerApp(options = {}) {
     setTransport(els.baseUrlInput?.value, els.tokenInput?.value);
     setStatus("正在连接本地播放器…", "muted");
     await refreshCatalogAndPlayback();
+    await mountTranscription();
   }
 
   async function bootstrapAndLoad(bootstrapToken) {
@@ -660,6 +769,7 @@ export function mountLivePlayerApp(options = {}) {
     applySessionToken(sessionToken);
     setStatus("已自动连接，正在加载课程…", "muted");
     await refreshCatalogAndPlayback();
+    await mountTranscription();
   }
 
   async function handleFatalError(data) {
@@ -766,11 +876,47 @@ export function mountLivePlayerApp(options = {}) {
       renderAll();
       loadSelectedCourse().catch((error) => surfaceError(error));
     });
+
+    els.transcriptionStart?.addEventListener("click", () => {
+      void (async () => {
+        const shouldRequestSystemPermission = transcription ? transcription.settings().systemAlert : els.transcriptionSystem?.checked !== false;
+        if (shouldRequestSystemPermission) requestNotificationPermission();
+        await mountTranscription();
+        if (!transcription || !transcriptionAvailable) { setTranscriptionStatus("实时转录需要已连接且支持转录的本地助手。"); return; }
+        const course = activeTranscriptionCourse();
+        if (!course) { renderTranscription(); return; }
+        setTranscriptionStatus("正在启动实时转录…");
+        await transcription.start(course);
+        if (transcription.snapshot().state === "listening") setTranscriptionStatus("正在实时转录。");
+      })().catch((error) => {
+        setTranscriptionStatus(error?.message || "无法启动实时转录。");
+        renderTranscription();
+      });
+    });
+    els.transcriptionStop?.addEventListener("click", () => {
+      void transcription?.stop().then(() => setTranscriptionStatus("转录已停止，可导出或清空。"), () => setTranscriptionStatus("停止转录失败；请稍后重试。"));
+    });
+    els.transcriptionExport?.addEventListener("click", () => { transcription?.exportMarkdown(); });
+    els.transcriptionClear?.addEventListener("click", () => { try { transcription?.clear(); dismissAlert(); setTranscriptionStatus("转录记录已清空。"); } catch (error) { setTranscriptionStatus(error?.message || "请先停止转录。"); } });
+    els.transcriptionAlert?.addEventListener("click", (event) => { if (event.target.closest?.("[data-transcription-dismiss]")) dismissAlert(); });
+    const updateSettings = () => {
+      if (!transcription) return;
+      transcription.updateSettings({
+        model: els.transcriptionModel?.value,
+        language: els.transcriptionLanguage?.value,
+        keywords: String(els.transcriptionKeywords?.value || "").split(/[,，]/u),
+        pageAlert: Boolean(els.transcriptionPage?.checked),
+        soundAlert: Boolean(els.transcriptionSound?.checked),
+        systemAlert: Boolean(els.transcriptionSystem?.checked),
+      });
+    };
+    [els.transcriptionModel, els.transcriptionLanguage, els.transcriptionKeywords, els.transcriptionPage, els.transcriptionSound, els.transcriptionSystem].forEach((element) => element?.addEventListener("change", updateSettings));
   }
 
   setRailOpen(state.railOpen);
   bindEvents();
   renderAll();
+  renderTranscription();
 
   const bootstrapToken = readBootstrapToken(locationLike);
   if (bootstrapToken) {
@@ -802,12 +948,14 @@ export function mountLivePlayerApp(options = {}) {
       return loadSelectedCourse();
     },
     destroy() {
+      void transcription?.stop({ keepalive: true });
       clearPlayback();
       setBoolStored(storage, STORAGE_KEYS.railOpen, state.railOpen);
     },
   };
 
   root.dataset.railOpen = state.railOpen ? "true" : "false";
+  win?.addEventListener?.("pagehide", () => { void transcription?.stop({ keepalive: true }); });
   if (typeof win !== "undefined") {
     win.LivePlayerApp = {
       mount: mountLivePlayerApp,

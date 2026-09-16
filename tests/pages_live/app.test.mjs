@@ -239,3 +239,107 @@ test("live route exposes an accessible course rail toggle", () => {
   assert.match(markup, /aria-expanded="false"/);
   assert.match(markup, /<aside[^>]+id="live-course-rail"[^>]+data-open="false"/s);
 });
+
+test("extension-only mode explains that the local helper is required", async () => {
+  const listeners = {};
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: false, innerHTML: "", textContent: "", hidden: false,
+    setAttribute() {}, addEventListener(type, handler) { (listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+  });
+  const state = element();
+  const transcriptionStart = element();
+  const transcriptionStatus = element();
+  const byName = new Map([
+    ["live-state", state], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", transcriptionStart], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", element()], ["transcription-status", transcriptionStatus], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { if (selector === "[data-live-state]") return state; const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/fudan-icourse-live-player/live/") },
+    extensionFactory: () => ({ name: "extension", probe: async () => true, getState: () => "connected", listLive: async () => [{ course_id: "c1", sub_id: "s1", available_views: ["teacher"] }] }),
+    localFactory: undefined,
+  });
+  assert.equal(transcriptionStart.disabled, true);
+  assert.match(transcriptionStatus.textContent, /本地助手/);
+});
+
+test("Pages transcription UI renders bounded local model download progress", async () => {
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: true, innerHTML: "", textContent: "", hidden: false, listeners: {},
+    setAttribute() {}, addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+    click() { for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} }); },
+  });
+  const transcriptionState = element();
+  const transcriptionStatus = element();
+  const transcriptionStart = element();
+  const byName = new Map([
+    ["live-state", element()], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", transcriptionStart], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", transcriptionState], ["transcription-status", transcriptionStatus], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  const app = await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/live/") },
+    extensionFactory: undefined,
+    localFactory: () => ({
+      name: "local", probe: async () => true, getState: () => "connected",
+      listLive: async () => [{ course_id: "c1", sub_id: "s1", course_title: "课程", available_views: ["teacher"] }],
+      transcriptionCapabilities: async () => ({ available: true }),
+      startTranscription: async () => ({ session_id: "tx-progress" }),
+      streamTranscription: async (_id, { onEvent }) => onEvent({ type: "state", state: "downloading-model", progress: 42, url: "https://model.invalid/private" }),
+      stopTranscription: async () => {}, mountPlayer: () => ({ dispose() {} }),
+    }),
+  });
+  await app.selectCourse("c1", "s1");
+  transcriptionStart.click();
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
+
+  assert.equal(transcriptionState.textContent, "下载模型 42%");
+  assert.match(transcriptionStatus.textContent, /下载.*42%/);
+});
+
+test("Pages course changes cancel a late local transcription start before streaming", async () => {
+  const element = () => ({
+    dataset: {}, disabled: false, value: "", checked: true, innerHTML: "", textContent: "", hidden: false, listeners: {},
+    setAttribute() {}, addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }, removeEventListener() {}, querySelector() { return null; }, replaceChildren() {},
+    click() { for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} }); },
+  });
+  const state = element();
+  const start = element();
+  const byName = new Map([
+    ["live-state", state], ["live-courses", element()], ["player", element()], ["view-bar", element()], ["refresh", element()], ["course-rail", element()], ["rail-toggle", element()],
+    ["transcription-start", start], ["transcription-stop", element()], ["transcription-export", element()], ["transcription-clear", element()], ["transcription-state", element()], ["transcription-status", element()], ["transcription-alert", element()], ["transcription-lines", element()], ["transcription-model", element()], ["transcription-language", element()], ["transcription-keywords", element()], ["transcription-page", element()], ["transcription-sound", element()], ["transcription-system", element()],
+  ]);
+  const documentRef = { querySelector(selector) { if (selector === "[data-live-state]") return state; const match = /^\[data-(.+)\]$/.exec(selector); return match ? byName.get(match[1]) || null : null; } };
+  let resolveStart;
+  const stops = [];
+  const streams = [];
+  const courses = [
+    { course_id: "old", sub_id: "one", course_title: "旧课程", available_views: ["teacher"] },
+    { course_id: "new", sub_id: "two", course_title: "新课程", available_views: ["teacher"] },
+  ];
+  const app = await boot({
+    documentRef,
+    windowRef: { location: new URL("https://johnxmj.github.io/live/") },
+    extensionFactory: undefined,
+    localFactory: () => ({
+      name: "local", probe: async () => true, getState: () => "connected", listLive: async () => courses,
+      transcriptionCapabilities: async () => ({ available: true }),
+      startTranscription: () => new Promise(resolve => { resolveStart = resolve; }),
+      streamTranscription: async (sessionId) => streams.push(sessionId),
+      stopTranscription: async sessionId => stops.push(sessionId),
+      mountPlayer: () => ({ dispose() {} }),
+    }),
+  });
+  await app.selectCourse("old", "one");
+  start.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  app.selectCourse("new", "two");
+  resolveStart({ session_id: "tx-late" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.deepEqual(stops, ["tx-late"]);
+  assert.deepEqual(streams, []);
+  assert.equal(app.activeCourse.course_id, "new");
+});

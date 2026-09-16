@@ -9,10 +9,15 @@ import time
 import ipaddress
 import math
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+import re
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+import requests
 
 from live_player.core.catalog import discover_live_courses, resolve_course_ids
 from live_player.core.sources import LiveSourceResolver, rewrite_hls_manifest
+from live_player.transcription.models import TranscriptionOptions
+from live_player.transcription.session import TranscriptionBusyError, TranscriptionManager
 from src.api.webvpn import get_ordinary_url, get_vpn_url
 from src.runtime.config import WEBVPN_BASE
 from .tokens import TokenStore
@@ -24,10 +29,13 @@ _SEGMENT_TTL_SECONDS = 90
 _MEDIA_IDLE_SECONDS = 5 * 60
 _MEDIA_MAX_SECONDS = 6 * 60 * 60
 _WEBVPN_HOST = urlsplit(WEBVPN_BASE).hostname or "webvpn.fudan.edu.cn"
+_LOOPBACK_AUTHORITY = re.compile(r"^127\.0\.0\.1:([1-9][0-9]{0,4})$")
+_TRANSCRIPTION_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _STATIC_ROOT = Path(__file__).resolve().parents[1] / "web"
 _STATIC_ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/transcription.js": ("transcription.js", "application/javascript; charset=utf-8"),
     "/transport-local.js": ("transport-local.js", "application/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/vendor/hls.min.js": ("vendor/hls.min.js", "application/javascript; charset=utf-8"),
@@ -49,6 +57,22 @@ def _json(status, value):
 
 def _error(status, code, message):
     return _json(status, {"error": {"code": code, "message": message}})
+
+
+def _is_auth_http_error(error):
+    """Return whether an upstream requests HTTPError proves session expiry."""
+    current = error
+    seen = set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, requests.exceptions.HTTPError):
+            response = getattr(current, "response", None)
+            if getattr(response, "status_code", None) in (401, 403):
+                return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return False
 
 
 @dataclass(frozen=True)
@@ -242,7 +266,7 @@ class _StreamBody:
 
 
 class LiveApplication:
-    def __init__(self, session_manager, course_ids=(), term=None, *, media_handler=None):
+    def __init__(self, session_manager, course_ids=(), term=None, *, media_handler=None, transcription_manager=None):
         self.session_manager = session_manager
         self.course_ids = tuple(course_ids)
         self.term = term
@@ -251,11 +275,24 @@ class LiveApplication:
         self.media_handler = media_handler or self._handle_media
         self._bootstrap = TokenStore()
         self._session_token = secrets.token_urlsafe(32)
+        self._loopback_authority = None
+        self._transcription_manager = transcription_manager
+
+    def set_loopback_authority(self, authority: str):
+        """Record the single trusted loopback authority chosen by the listener."""
+        match = _LOOPBACK_AUTHORITY.fullmatch(authority) if isinstance(authority, str) else None
+        if match is None or int(match.group(1)) > 65535:
+            raise ValueError("invalid loopback authority")
+        if self._loopback_authority is not None and authority != self._loopback_authority:
+            raise RuntimeError("loopback authority already configured")
+        self._loopback_authority = authority
 
     def issue_bootstrap_token(self, ttl_seconds=60):
         return self._bootstrap.issue(True, ttl_seconds)
 
     def shutdown(self):
+        if self._transcription_manager is not None:
+            self._transcription_manager.shutdown()
         self.session_manager.invalidate()
         self._media_routes.clear()
         self._media_tokens.clear()
@@ -301,6 +338,14 @@ class LiveApplication:
                     item["media_token"] = self._media_token_for_course(course.course_id, course.sub_id)
                     payload.append(item)
                 return _json(200, payload)
+            if route == "/api/transcription/capabilities" and method == "GET":
+                return _json(200, self._transcription().capabilities())
+            if route == "/api/transcription/start" and method == "POST":
+                return self._start_transcription(body)
+            if route.startswith("/api/transcription/events/") and method == "GET":
+                return self._transcription_events(route)
+            if route == "/api/transcription/stop" and method == "POST":
+                return self._stop_transcription(body)
             return _error(404, "VIEW_UNAVAILABLE", "Requested view is unavailable")
         except Exception:
             return _error(502, "UPSTREAM_FAILED", "Live service request failed")
@@ -311,6 +356,93 @@ class LiveApplication:
             getattr(handler, "__self__", None) is self
             and getattr(handler, "__func__", None) is LiveApplication._handle_media
         )
+
+    def _transcription(self):
+        if self._transcription_manager is None:
+            self._transcription_manager = TranscriptionManager()
+        return self._transcription_manager
+
+    def _start_transcription(self, body):
+        if not isinstance(body, bytes) or len(body) > 8192:
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+        try:
+            options = TranscriptionOptions.from_payload(json.loads(body))
+        except (ValueError, TypeError, UnicodeError):
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+
+        try:
+            client = self.session_manager.get_client()
+        except Exception:
+            return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+
+        resolver = LiveSourceResolver(client)
+        try:
+            resolver.resolve(options.course_id, options.sub_id, "teacher_audio")
+            view = "teacher_audio"
+        except (RuntimeError, ValueError) as error:
+            if _is_auth_http_error(error):
+                self.session_manager.invalidate()
+                return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+            try:
+                resolver.resolve(options.course_id, options.sub_id, "teacher")
+                view = "teacher"
+            except (RuntimeError, ValueError) as error:
+                if _is_auth_http_error(error):
+                    self.session_manager.invalidate()
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+                return _error(422, "AUDIO_UNAVAILABLE", "Live audio is unavailable")
+            except Exception as error:
+                if _is_auth_http_error(error):
+                    self.session_manager.invalidate()
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+                raise
+        except Exception as error:
+            if _is_auth_http_error(error):
+                self.session_manager.invalidate()
+                return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+            raise
+
+        if self._loopback_authority is None:
+            return _error(422, "AUDIO_UNAVAILABLE", "Live audio is unavailable")
+        media_token = self._media_token_for_course(options.course_id, options.sub_id)
+        manifest_url = (
+            f"http://{self._loopback_authority}/media/{options.course_id}/{options.sub_id}/"
+            f"{view}/manifest.m3u8?{urlencode({'media_token': media_token})}"
+        )
+        try:
+            session_id = self._transcription().start(options, lambda: manifest_url)
+        except TranscriptionBusyError:
+            return _error(409, "TRANSCRIPTION_BUSY", "Another transcription session is active")
+        except ValueError:
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+        return _json(201, {"session_id": session_id})
+
+    def _transcription_events(self, route):
+        session_id = route.removeprefix("/api/transcription/events/")
+        if not _TRANSCRIPTION_SESSION_ID.fullmatch(session_id):
+            return _error(404, "VIEW_UNAVAILABLE", "Requested view is unavailable")
+        try:
+            events = self._transcription().events(session_id)
+        except KeyError:
+            return _error(404, "VIEW_UNAVAILABLE", "Requested view is unavailable")
+        return Response(
+            200,
+            {"Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no"},
+            body_iter=events,
+        )
+
+    def _stop_transcription(self, body):
+        if not isinstance(body, bytes) or len(body) > 8192:
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+        try:
+            payload = json.loads(body)
+        except (ValueError, TypeError, UnicodeError):
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+        session_id = payload.get("session_id") if isinstance(payload, dict) and set(payload) == {"session_id"} else None
+        if not isinstance(session_id, str) or not _TRANSCRIPTION_SESSION_ID.fullmatch(session_id):
+            return _error(400, "INVALID_TRANSCRIPTION_REQUEST", "Invalid transcription request")
+        self._transcription().stop(session_id)
+        return _json(200, {})
 
     def _serve_static(self, route):
         entry = _STATIC_ASSETS.get(route)

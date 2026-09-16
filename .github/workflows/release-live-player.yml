@@ -31,6 +31,10 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-live-build.txt
       - run: python scripts/build_windows.py
         name: Build Windows player
+      - run: python scripts/build_windows.py --audit-only
+        name: Audit native build inputs
+      - run: python scripts/build_windows.py --audit-archives-in dist
+        name: Audit native build archive
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - run: node edge_extension/scripts/build.mjs
@@ -44,12 +48,12 @@ jobs:
             dist/*.zip
             dist/SHA256SUMS-*.txt
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/live-v')
         with:
           files: |
             dist/fudan-icourse-live-${{ runner.os == 'Windows' && 'windows' || 'darwin' }}-*.zip
             dist/SHA256SUMS-*.txt
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+        if: startsWith(github.ref, 'refs/tags/live-v') && runner.os == 'Windows'
         with:
           files: dist/fudan-icourse-live-edge.zip

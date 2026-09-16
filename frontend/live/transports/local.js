@@ -1,3 +1,5 @@
+import { parseSseStream } from "../transcription.js";
+
 export function parseBridge(location) {
   try {
     const hash = typeof location?.hash === "string" ? location.hash : "";
@@ -49,7 +51,7 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
     if (!response.ok) {
       const payload = await response.json?.().catch?.(() => null);
       const error = new Error(payload?.error?.message || `Local request failed with ${response.status}`);
-      error.status = response.status; error.code = payload?.error?.code;
+      error.status = response.status; error.code = payload?.error?.code || null;
       throw error;
     }
     return response;
@@ -81,6 +83,16 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
       throw error;
     }
   };
+  const requestJson = async (path, init = {}) => {
+    await connect;
+    return (await request(path, init)).json();
+  };
+  const postJson = (path, payload, init = {}) => requestJson(path, {
+    ...init,
+    method: "POST",
+    headers: { ...init.headers, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
   return {
     name: "local", baseUrl, ready: connect,
     probe: async () => { try { await connect; return true; } catch { return false; } },
@@ -88,6 +100,17 @@ export function createLocalTransport(location = globalThis.location, fetcher = g
     listLiveCourses: async () => { const result = await json("/api/live-courses"); return Array.isArray(result) ? result : []; },
     refreshLiveCourses: async () => { const result = await json("/api/live-courses"); return Array.isArray(result) ? result : []; },
     requestJson: json,
+    transcriptionCapabilities: () => requestJson("/api/transcription/capabilities"),
+    startTranscription: (options) => postJson("/api/transcription/start", options),
+    async streamTranscription(sessionId, { signal, onEvent } = {}) {
+      await connect;
+      const response = await request(`/api/transcription/events/${encodeURIComponent(sessionId)}`, {
+        headers: { Accept: "text/event-stream" },
+        signal,
+      });
+      return parseSseStream(response.body, { signal, onEvent });
+    },
+    stopTranscription: (sessionId, { keepalive = false } = {}) => postJson("/api/transcription/stop", { session_id: sessionId }, { keepalive }),
     manifestUrl(courseId, subId, view, mediaToken = "") { const url = new URL(`/media/${encodeURIComponent(courseId)}/${encodeURIComponent(subId)}/${encodeURIComponent(view)}/manifest.m3u8`, baseUrl); if (mediaToken) url.searchParams.set("media_token", mediaToken); return url.toString(); },
     segmentUrl(segmentToken, mediaToken = "") { const url = new URL(`/media/segment/${encodeURIComponent(segmentToken)}`, baseUrl); if (mediaToken) url.searchParams.set("media_token", mediaToken); return url.toString(); },
     getState: () => state,

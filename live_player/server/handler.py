@@ -57,7 +57,9 @@ def serve(application, host="127.0.0.1", port=0):
             try:
                 self.send_response(response.status)
                 for key, value in response.headers.items():
-                    if key.lower() not in {"cache-control", "connection"}:
+                    if key.lower() not in {"cache-control", "connection"} and not (
+                        response.body_iter is not None and key.lower() == "content-length"
+                    ):
                         self.send_header(key, value)
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
@@ -76,7 +78,11 @@ def serve(application, host="127.0.0.1", port=0):
                         self.wfile.write(response.body)
                     else:
                         for chunk in response.body_iter:
-                            self.wfile.write(chunk)
+                            try:
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                                return
             finally:
                 close = getattr(response.body_iter, "close", None)
                 if close is not None:
@@ -90,4 +96,13 @@ def serve(application, host="127.0.0.1", port=0):
         def handle_error(self, request, client_address):
             pass  # A streaming exception must not dump upstream URLs or cookies.
 
-    return Server((host, port), Handler)
+    server = Server((host, port), Handler)
+    configure_authority = getattr(application, "set_loopback_authority", None)
+    if configure_authority is not None:
+        try:
+            bound_host, bound_port = server.server_address[:2]
+            configure_authority(f"{bound_host}:{bound_port}")
+        except Exception:
+            server.server_close()
+            raise
+    return server

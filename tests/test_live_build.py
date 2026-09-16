@@ -32,6 +32,67 @@ class NativeBuildTest(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 build_windows.build(Path(directory))
 
+    def test_build_collects_whisper_runtime_without_model_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = build_windows.build_pyinstaller_command(
+                Path(directory) / "dist", Path(directory) / "work", Path(directory) / "spec"
+            )
+
+        self.assertGreaterEqual(command.count("--collect-all"), 4)
+        for package in ("faster_whisper", "ctranslate2", "av", "imageio_ffmpeg"):
+            self.assertIn(package, command)
+        self.assertFalse(any("models--" in value.lower() or ".cache" in value.lower() for value in command))
+
+    def test_archive_audit_rejects_model_transcript_audio_and_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "native.zip"
+            import zipfile
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("Fudan/models--Systran/model.bin", "fixture")
+                package.writestr("Fudan/transcripts/live.md", "fixture")
+                package.writestr("Fudan/audio/lecture.wav", "fixture")
+                package.writestr("Fudan/audio/recording.txt", "user data")
+                package.writestr("Fudan/data/transcript.json", "user data")
+                package.writestr("Fudan/data/README.md", "user data")
+                package.writestr("Fudan/libavcodec.dll", "runtime")
+                package.writestr("Fudan/_internal/av/audio/runtime.py", "runtime")
+                package.writestr("Fudan/_internal/av/audio/user/data/notes.txt", "user data")
+                package.writestr("Fudan/user/_internal/av/audio/recording.txt", "user data")
+                package.writestr("Fudan/_internal/cv2/data/cascade.xml", "runtime")
+
+            denied = build_windows.audit_archive(archive)
+
+        self.assertEqual(
+            denied,
+            [
+                "Fudan/models--Systran/model.bin", "Fudan/transcripts/live.md", "Fudan/audio/lecture.wav",
+                "Fudan/audio/recording.txt", "Fudan/data/transcript.json", "Fudan/data/README.md",
+                "Fudan/_internal/av/audio/user/data/notes.txt",
+                "Fudan/user/_internal/av/audio/recording.txt",
+            ],
+        )
+
+    def test_archive_audit_allows_approved_pyav_audio_but_rejects_arbitrary_audio_and_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "native.zip"
+            import zipfile
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("Fudan/_internal/av/audio/runtime.py", "runtime")
+                package.writestr("Fudan/_internal/av/audio/user/data/notes.txt", "user data")
+                package.writestr("Fudan/_internal/other/audio/runtime.py", "user data")
+                package.writestr("Fudan/_internal/other/data/runtime.py", "user data")
+
+            denied = build_windows.audit_archive(archive)
+
+        self.assertEqual(
+            denied,
+            [
+                "Fudan/_internal/av/audio/user/data/notes.txt",
+                "Fudan/_internal/other/audio/runtime.py",
+                "Fudan/_internal/other/data/runtime.py",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,20 @@ python -m live_player --interactive
 
 按提示输入学号、密码，再按课程名或教师搜索并选择编号。选择自动保存为 `course-selection.json`，下次直接复用；加 `--select-courses` 可重新选择。密码输入不会显示，也不会由启动器保存。macOS 优先打开 Chrome；Windows 优先打开 Edge。浏览器会自动配对，无需复制地址或令牌。关闭终端可停止助手。
 
+## 本地实时转录
+
+实时转录由本机运行的开源 `faster-whisper` 模型完成，默认模型是 `base`。它不使用任何 AI API key，也没有按次或按时长的 API 成本；课程授权、播放和转录仍仅在你的本机助手中进行。
+
+1. 按上面的命令安装并启动本地助手，随后选择一门正在直播的课程并开始播放。
+2. 在播放器的“实时转录”面板点击“开始转录”。这是手动操作，播放不会自动启动转录。
+3. 首次使用时等待默认 `base` 模型下载并加载；之后会复用本机已下载的模型。不要把模型目录或缓存打包、上传或提交。
+4. 默认提醒关键词为：点名、签到、小测、测验、期中、期末、quiz。可按需修改关键词，并启用页面提醒、声音提醒和系统通知。
+5. 关闭页面前使用“导出 Markdown”保存需要保留的内容。音频不保存到磁盘；转录文字只在当前页面会话中存在，未导出即会在关闭页面后消失。
+
+CPU 可以运行转录，但较慢的电脑可能跟不上直播；有可用 GPU 时 `faster-whisper` 会使用 GPU 加速。仅安装 Edge/Chrome 扩展的播放路径不能运行本地转录，必须启动支持转录的本地助手。
+
+常见问题：显示“未找到 ffmpeg，请安装后重新启动本地助手。”时安装可用的 ffmpeg 后重启助手；模型下载失败时检查网络或稍后重试；CPU 太慢时选择较小模型或关闭其他负载；系统通知没有出现时在浏览器设置中允许通知；复旦登录过期时重新在官方页面登录；课程结束或没有直播时停止转录并刷新课程状态。
+
 完整安装、排错和验收步骤见 [中文使用说明](docs/live-player.md)。PR 合并前，已部署的公共 Pages 页面仍可能是旧版本；本机扩展入口与本地播放器可独立使用。
 
 Standalone Fudan iCourse current-live player with a Microsoft Edge extension,
@@ -89,4 +103,4 @@ node edge_extension/scripts/build.mjs
 python scripts/checksums.py
 ```
 
-The historical `build_windows.py` name is retained; it now runs PyInstaller on the current OS and creates a platform-specific ZIP in `dist/`. Build Windows packages on Windows and macOS packages on macOS. macOS packages include a double-click `.command` launcher. The release workflow tests first, builds both platforms, uploads artifacts for manual runs, and publishes ZIPs/checksums on `live-v*` tags. Native packages are not vendor-signed/notarized.
+The historical `build_windows.py` name is retained; it now runs PyInstaller on the current OS and creates a platform-specific ZIP in `dist/`. Build Windows packages on Windows and macOS packages on macOS. macOS packages include a double-click `.command` launcher. Native ZIPs include the `faster-whisper` runtime and wheel-provided ffmpeg, but exclude model weights/caches, audio, transcripts, and credentials. The release workflow tests first, audits each ZIP, builds both platforms, uploads artifacts for manual runs, and publishes ZIPs/checksums only on `live-v*` tags. Native packages are not vendor-signed/notarized.

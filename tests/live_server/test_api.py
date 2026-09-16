@@ -60,6 +60,42 @@ class LiveApiTest(unittest.TestCase):
     def test_rejects_course_list_without_session_token(self):
         self.assertEqual(self.app.handle("GET", "/api/live-courses", {}, b"").status, 401)
 
+    def test_public_static_module_graph_serves_transcription_without_a_bearer(self):
+        page = self.app.handle("GET", "/", {}, b"")
+        app = self.app.handle("GET", "/app.js", {}, b"")
+        transport = self.app.handle("GET", "/transport-local.js", {}, b"")
+
+        self.assertEqual(page.status, 200)
+        self.assertIn(b'app.js', page.body)
+        self.assertEqual(app.status, 200)
+        self.assertIn(b'./transcription.js', app.body)
+        self.assertEqual(transport.status, 200)
+        self.assertIn(b'./transcription.js', transport.body)
+
+        server = serve(self.app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for method in ("GET", "HEAD"):
+                connection = http.client.HTTPConnection(*server.server_address, timeout=3)
+                try:
+                    connection.request(method, "/transcription.js")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.getheader("Content-Type"), "application/javascript; charset=utf-8")
+                    self.assertEqual(response.getheader("Cache-Control"), "no-store")
+                    body = response.read()
+                    if method == "GET":
+                        self.assertIn(b"createTranscriptionController", body)
+                    else:
+                        self.assertEqual(body, b"")
+                finally:
+                    connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_returns_only_safe_course_fields(self):
         headers = self.authorize()
         for _ in range(2):

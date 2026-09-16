@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 
 import { createHls, nextRecoveryAction } from "../../live_player/web/app.js";
 
@@ -55,6 +57,10 @@ class FakeElement {
   pause() {
     this.pauseCalls += 1;
   }
+
+  click() {
+    for (const handler of this.listeners.click || []) handler({ target: this, preventDefault() {} });
+  }
 }
 
 function createJsonResponse(status, body) {
@@ -92,6 +98,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
   const viewHint = new FakeElement("view-hint");
   const connectionHint = new FakeElement("connection-hint");
   const previewLine = new FakeElement("preview-line");
+  const transcriptionState = new FakeElement("transcription-state");
+  const transcriptionStart = new FakeElement("transcription-start");
+  const transcriptionStop = new FakeElement("transcription-stop");
+  const transcriptionExport = new FakeElement("transcription-export");
+  const transcriptionClear = new FakeElement("transcription-clear");
+  const transcriptionStatus = new FakeElement("transcription-status");
+  const transcriptionAlert = new FakeElement("transcription-alert");
+  const transcriptionLines = new FakeElement("transcription-lines");
+  const transcriptionModel = new FakeElement("transcription-model");
+  const transcriptionLanguage = new FakeElement("transcription-language");
+  const transcriptionKeywords = new FakeElement("transcription-keywords");
+  const transcriptionPage = new FakeElement("transcription-page");
+  const transcriptionSound = new FakeElement("transcription-sound");
+  const transcriptionSystem = new FakeElement("transcription-system");
   const stage = new FakeElement("stage");
 
   const bySelector = {
@@ -112,6 +132,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
     "[data-view-hint]": viewHint,
     "[data-connection-hint]": connectionHint,
     "[data-preview-line]": previewLine,
+    "[data-transcription-state]": transcriptionState,
+    "[data-transcription-start]": transcriptionStart,
+    "[data-transcription-stop]": transcriptionStop,
+    "[data-transcription-export]": transcriptionExport,
+    "[data-transcription-clear]": transcriptionClear,
+    "[data-transcription-status]": transcriptionStatus,
+    "[data-transcription-alert]": transcriptionAlert,
+    "[data-transcription-lines]": transcriptionLines,
+    "[data-transcription-model]": transcriptionModel,
+    "[data-transcription-language]": transcriptionLanguage,
+    "[data-transcription-keywords]": transcriptionKeywords,
+    "[data-transcription-page]": transcriptionPage,
+    "[data-transcription-sound]": transcriptionSound,
+    "[data-transcription-system]": transcriptionSystem,
     "[data-stage]": stage,
   };
 
@@ -164,6 +198,20 @@ function createLivePlayerDom({ innerWidth = 1440, videoCanPlayType = "" } = {}) 
       viewHint,
       connectionHint,
       previewLine,
+      transcriptionState,
+      transcriptionStart,
+      transcriptionStop,
+      transcriptionExport,
+      transcriptionClear,
+      transcriptionStatus,
+      transcriptionAlert,
+      transcriptionLines,
+      transcriptionModel,
+      transcriptionLanguage,
+      transcriptionKeywords,
+      transcriptionPage,
+      transcriptionSound,
+      transcriptionSystem,
       stage,
     },
   };
@@ -276,6 +324,211 @@ test("refreshes source after repeated fragment failures", () => {
     nextRecoveryAction({ fragmentFailures: 3, sessionExpired: false }),
     "refresh-source",
   );
+});
+
+test("transcription starts only after the explicit button click", async () => {
+  const course = {
+    course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"],
+  };
+  const requests = createFetchSequence([
+    createJsonResponse(200, [course]),
+    createJsonResponse(200, { available: true }),
+    createJsonResponse(200, { session_id: "tx-1" }),
+  ]);
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/live-courses")), "expected catalog load");
+  assert.equal(requests.calls.some((call) => call.url.endsWith("/api/transcription/start")), false);
+  elements.transcriptionStart.click();
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/transcription/start")), "expected explicit transcription start");
+  const start = requests.calls.find((call) => call.url.endsWith("/api/transcription/start"));
+  assert.deepEqual(JSON.parse(start.init.body), { course_id: "37142", sub_id: "659200", model: "base", language: "zh" });
+});
+
+test("transcription UI renders safe model download progress from the SSE state", async () => {
+  const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
+  const encoder = new TextEncoder();
+  const fetchImpl = async (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/api/live-courses") return createJsonResponse(200, [course]);
+    if (path === "/api/transcription/capabilities") return createJsonResponse(200, { available: true });
+    if (path === "/api/transcription/start") return createJsonResponse(200, { session_id: "tx-progress" });
+    if (path === "/api/transcription/events/tx-progress") return {
+      ok: true, status: 200,
+      headers: { get: () => "text/event-stream" },
+      body: new ReadableStream({ start(controller) {
+        controller.enqueue(encoder.encode("event: transcript\ndata: {\"type\":\"state\",\"state\":\"downloading-model\",\"progress\":42,\"url\":\"https://model.invalid/private\"}\n\n"));
+        controller.close();
+      } }),
+    };
+    throw new Error(`unexpected request ${path}`);
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl, token: "session-token" });
+
+  await waitFor(() => elements.transcriptionStart.disabled === false, "expected available transcription control");
+  elements.transcriptionStart.click();
+  await waitFor(() => /下载模型 42%/.test(elements.transcriptionState.textContent), "expected visible download percentage");
+  assert.match(elements.transcriptionStatus.textContent, /下载.*42%/);
+});
+
+test("loopback transcription UI smoke uses the real page transport and SSE fixture", async () => {
+  const course = {
+    course_id: "37142", sub_id: "659200", course_title: "离线演示课", media_token: "local-only", available_views: ["teacher"],
+  };
+  const transcriptEvents = [
+    { type: "state", state: "listening" },
+    { type: "segment", start: 1, end: 2, text: "请大家签到" },
+    { type: "segment", start: 3, end: 4, text: "再次签到" },
+    { type: "ended", state: "stopped" },
+  ].map((record) => `event: transcript\ndata: ${JSON.stringify(record)}\n\n`).join("");
+  const calls = [];
+  let starts = 0;
+  let secondStreamCancelled = false;
+  const fixtureServer = createServer(async (request, response) => {
+    const body = [];
+    for await (const chunk of request) body.push(chunk);
+    const url = new URL(request.url, "http://127.0.0.1");
+    calls.push({ method: request.method, url: url.pathname, body: Buffer.concat(body).toString("utf8") });
+    const sendJson = (status, payload) => {
+      const encoded = JSON.stringify(payload);
+      response.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(encoded) });
+      response.end(encoded);
+    };
+    if (request.method === "GET" && url.pathname === "/") {
+      const html = readFileSync("live_player/web/index.html");
+      response.writeHead(200, { "content-type": "text/html", "content-length": html.length });
+      response.end(html);
+    } else if (request.method === "GET" && url.pathname === "/app.js") {
+      const source = readFileSync("live_player/web/app.js");
+      response.writeHead(200, { "content-type": "text/javascript", "content-length": source.length });
+      response.end(source);
+    } else if (request.method === "GET" && url.pathname === "/api/live-courses") {
+      sendJson(200, [course]);
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/capabilities") {
+      sendJson(200, { available: true });
+    } else if (request.method === "POST" && url.pathname === "/api/transcription/start") {
+      sendJson(200, { session_id: `tx-${++starts}` });
+    } else if (request.method === "POST" && url.pathname === "/api/transcription/stop") {
+      sendJson(200, {});
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/events/tx-1") {
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      response.end(transcriptEvents);
+    } else if (request.method === "GET" && url.pathname === "/api/transcription/events/tx-2") {
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      request.on("aborted", () => { secondStreamCancelled = true; });
+      response.on("close", () => { if (!response.writableEnded) secondStreamCancelled = true; });
+    } else {
+      sendJson(404, { error: { message: `unexpected fixture request: ${request.method} ${url.pathname}` } });
+    }
+  });
+  await new Promise((resolve) => fixtureServer.listen(0, "127.0.0.1", resolve));
+  const { port } = fixtureServer.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const realFetch = globalThis.fetch;
+  const fetchCalls = [];
+  const guardedFetch = async (url, init) => {
+    const parsed = new URL(url);
+    fetchCalls.push(parsed.href);
+    if (parsed.hostname !== "127.0.0.1") throw new Error(`non-loopback request: ${parsed.href}`);
+    return realFetch(url, init);
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  win.location.origin = baseUrl;
+  win.fetch = guardedFetch;
+  const originalDocument = globalThis.document;
+  const originalUrl = globalThis.URL;
+  let exportedBlob = null;
+  const clicks = [];
+  class ExportUrl extends originalUrl {
+    static createObjectURL(blob) { exportedBlob = blob; return "blob:offline-smoke"; }
+    static revokeObjectURL() {}
+  }
+  globalThis.URL = ExportUrl;
+  globalThis.document = { createElement() { return { click() { clicks.push(this); } }; } };
+  try {
+    const page = await guardedFetch(`${baseUrl}/`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<script type="module">[\s\S]*import \{ mountLivePlayerApp \} from "\.\/app\.js"/);
+    const appModule = await guardedFetch(`${baseUrl}/app.js`);
+    assert.equal(appModule.status, 200);
+    assert.match(await appModule.text(), /mountLivePlayerApp/);
+    const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+    const app = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, baseUrl, token: "offline-session" });
+    await waitFor(() => calls.some((call) => call.url === "/api/live-courses"), "fixture should load the catalog");
+    await app.connect();
+    await waitFor(() => elements.transcriptionStart.disabled === false, "offline fixture should expose manual transcription start");
+    elements.transcriptionStart.click();
+    await waitFor(() => elements.transcriptionState.textContent === "已停止", "fixture should render the ended state");
+    assert.match(elements.transcriptionLines.innerHTML, /请大家签到/);
+    assert.equal((elements.transcriptionLines.innerHTML.match(/is-alert/g) || []).length, 1, "签到 cooldown should suppress only the repeated highlight");
+    assert.equal(elements.transcriptionAlert.hidden, false);
+    assert.match(elements.transcriptionAlert.innerHTML, /签到/);
+    assert.equal(elements.transcriptionExport.disabled, false);
+    elements.transcriptionExport.click();
+    assert.equal(clicks.length, 1);
+    assert.match(await exportedBlob.text(), /请大家签到/);
+    assert.match(await exportedBlob.text(), /再次签到/);
+
+    elements.transcriptionStart.click();
+    await waitFor(() => calls.some((call) => call.url.endsWith("/api/transcription/events/tx-2")), "second manual start should open the fixture stream");
+    elements.transcriptionStop.click();
+    await waitFor(() => secondStreamCancelled, "manual stop should abort the fake stream");
+    await waitFor(() => calls.filter((call) => call.url === "/api/transcription/stop").length === 1, "manual stop should reach the fixture server");
+    assert.equal(calls.filter((call) => call.url === "/api/transcription/stop").length, 1);
+    assert.ok(fetchCalls.every((url) => new URL(url).hostname === "127.0.0.1"), "offline fixture must not contact Fudan");
+    assert.equal(fetchCalls.some((url) => url.includes("model")), false, "UI smoke must not load a model");
+  } finally {
+    globalThis.URL = originalUrl;
+    globalThis.document = originalDocument;
+    fixtureServer.close();
+    fixtureServer.closeAllConnections?.();
+  }
+});
+
+test("transcription start stays disabled when the local helper lacks the capability", async () => {
+  const course = { course_id: "37142", sub_id: "659200", course_title: "课程", media_token: "media-token", available_views: ["teacher"] };
+  const requests = createFetchSequence([createJsonResponse(200, [course]), createJsonResponse(200, { available: false })]);
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
+
+  await waitFor(() => requests.calls.some((call) => call.url.endsWith("/api/transcription/capabilities")), "expected capability probe");
+  assert.equal(elements.transcriptionStart.disabled, true);
+  assert.match(elements.transcriptionStatus.textContent, /支持转录的本地助手/);
+});
+
+test("changing courses cancels a late transcription start before it opens a stream", async () => {
+  const oldCourse = { course_id: "old", sub_id: "one", course_title: "旧课程", media_token: "media-old", available_views: ["teacher"] };
+  const newCourse = { course_id: "new", sub_id: "two", course_title: "新课程", media_token: "media-new", available_views: ["teacher"] };
+  const calls = [];
+  let resolveStart;
+  const fetchImpl = (url, init = {}) => {
+    calls.push({ url, init });
+    if (url.endsWith("/api/live-courses")) return Promise.resolve(createJsonResponse(200, [oldCourse, newCourse]));
+    if (url.endsWith("/api/transcription/capabilities")) return Promise.resolve(createJsonResponse(200, { available: true }));
+    if (url.endsWith("/api/transcription/start")) return new Promise(resolve => { resolveStart = resolve; });
+    if (url.endsWith("/api/transcription/stop")) return Promise.resolve(createJsonResponse(200, {}));
+    return Promise.resolve(createJsonResponse(200, {}));
+  };
+  const { doc, win, elements } = createLivePlayerDom();
+  const { mountLivePlayerApp } = await import("../../live_player/web/app.js");
+  const app = mountLivePlayerApp({ document: doc, window: win, fetchImpl, token: "session-token" });
+  await waitFor(() => calls.some(call => call.url.endsWith("/api/transcription/capabilities")), "expected capability probe");
+  elements.transcriptionStart.click();
+  await waitFor(() => typeof resolveStart === "function", "expected transcription start request");
+  app.selectCourse("new");
+  resolveStart(createJsonResponse(200, { session_id: "tx-late" }));
+  await waitFor(() => calls.some(call => call.url.endsWith("/api/transcription/stop")), "expected late session stop");
+
+  const stop = calls.find(call => call.url.endsWith("/api/transcription/stop"));
+  assert.deepEqual(JSON.parse(stop.init.body), { session_id: "tx-late" });
+  assert.equal(calls.some(call => call.url.includes("/api/transcription/events/")), false);
+  assert.equal(app.state.activeCourse.course_id, "new");
+  assert.equal(elements.transcriptionExport.disabled, true);
 });
 
 test("requires login when session has expired", () => {
@@ -458,7 +711,7 @@ test("redeems bootstrap tokens from the URL before loading courses", async () =>
   });
 
   await waitFor(
-    () => transport.calls.length === 2 && api.state.token === "session-token",
+    () => transport.calls.length >= 2 && api.state.token === "session-token",
     "expected the bootstrap token to be exchanged before the catalog request",
   );
 
@@ -606,7 +859,7 @@ test("keeps the redeemed session token when the live catalog fails after bootstr
     "expected the app to surface the catalog failure after bootstrap succeeds",
   );
 
-  assert.equal(transport.calls.length, 2);
+  assert.equal(transport.calls.length, 3);
   assert.equal(api.state.token, "session-token");
   assert.equal(elements.tokenInput.value, "session-token");
   assert.equal(elements.connectionHint.textContent, "已连接本地播放器。");
@@ -683,7 +936,7 @@ test("redeems fragment bootstrap and removes it before the first request", async
       return createJsonResponse(200, url.endsWith("/api/session") ? { token: "session-token" } : []);
     },
   });
-  await waitFor(() => calls.length === 2, "fragment pairing should load the catalog");
+  await waitFor(() => calls.length >= 2, "fragment pairing should load the catalog");
   assert.equal(api.state.token, "session-token");
 });
 
@@ -696,11 +949,11 @@ test("media authorization failure refreshes the short-lived media token without 
   const api = mountLivePlayerApp({ document: doc, window: win, Hls: FakeHls, fetchImpl: requests.fetch, token: "session-token" });
   await waitFor(() => FakeHls.instances.length === 1, "initial playback");
   await FakeHls.instances[0].emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
-  assert.equal(requests.calls.length, 2);
+  assert.equal(requests.calls.length, 3);
   assert.equal(api.state.recovery.sessionExpired, false);
   assert.match(FakeHls.instances.at(-1).sources[0], /fresh-media/);
   await FakeHls.instances.at(-1).emitFatal({ fatal: true, response: { code: 401 }, details: "manifestLoadError" });
-  assert.equal(requests.calls.length, 2, "auth recovery must be bounded");
+  assert.equal(requests.calls.length, 3, "auth recovery must be bounded");
 });
 
 test("catalog authorization failure clears stale playback and requires reconnecting", async () => {

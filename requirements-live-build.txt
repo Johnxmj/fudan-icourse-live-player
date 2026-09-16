@@ -1,1 +1,2 @@
+# Install requirements.txt first; PyInstaller packages its runtime dependencies.
 pyinstaller>=6,<7
