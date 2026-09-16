@@ -3,6 +3,8 @@
 import json
 import unittest
 
+import requests
+
 from live_player.server.app import LiveApplication
 from live_player.transcription.session import TranscriptionBusyError
 
@@ -17,6 +19,18 @@ class Client:
         if self.teacher_audio:
             output["m3u8_audio"] = "https://media.invalid/teacher-audio.m3u8"
         return {"sub_id": sub_id, "sub_status": 1, "live_url": {"output": output}}
+
+
+class SequencedClient(Client):
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    def get_sub_info(self, course_id, sub_id):
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 class SessionManager:
@@ -100,6 +114,69 @@ class TranscriptionApiTest(unittest.TestCase):
     @staticmethod
     def defaults():
         return {"course_id": "c1", "sub_id": "s1"}
+
+    @staticmethod
+    def http_error(status, secret):
+        response = requests.Response()
+        response.status_code = status
+        response.url = f"https://media.invalid/{secret}"
+        return requests.exceptions.HTTPError(f"credential={secret}", response=response)
+
+    def assert_login_required_for_source_error(self, status, client, *, invalidation_count=1):
+        manager = Manager()
+        sessions = SessionManager(client)
+        app = LiveApplication(sessions, transcription_manager=manager)
+        app.set_loopback_authority("127.0.0.1:4310")
+
+        response = app.handle("POST", "/api/transcription/start", self.auth_for(app), self.body(self.defaults()))
+
+        self.assertEqual(response.status, 401)
+        self.assertEqual(json.loads(response.body)["error"]["code"], "LOGIN_REQUIRED")
+        self.assertEqual(sessions.invalidated, invalidation_count)
+        self.assertIsNone(manager.started)
+        self.assertNotIn(b"secret", response.body)
+
+    def test_start_invalidates_cached_session_for_teacher_audio_http_401_or_403(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                self.assert_login_required_for_source_error(
+                    status,
+                    SequencedClient([self.http_error(status, f"secret-teacher-audio-{status}")]),
+                )
+
+    def test_start_invalidates_cached_session_for_teacher_fallback_http_401_or_403(self):
+        unavailable = {"sub_id": "s1", "sub_status": 1, "live_url": {"output": {}}}
+        for status in (401, 403):
+            with self.subTest(status=status):
+                self.assert_login_required_for_source_error(
+                    status,
+                    SequencedClient([
+                        unavailable,
+                        self.http_error(status, f"secret-teacher-fallback-{status}"),
+                    ]),
+                )
+
+    def test_start_preserves_unexpected_source_http_error(self):
+        manager = Manager()
+        sessions = SessionManager(SequencedClient([self.http_error(500, "secret-upstream-error")]))
+        app = LiveApplication(sessions, transcription_manager=manager)
+        app.set_loopback_authority("127.0.0.1:4310")
+
+        response = app.handle("POST", "/api/transcription/start", self.auth_for(app), self.body(self.defaults()))
+
+        self.assertEqual(response.status, 502)
+        self.assertEqual(json.loads(response.body)["error"]["code"], "UPSTREAM_FAILED")
+        self.assertEqual(sessions.invalidated, 0)
+        self.assertIsNone(manager.started)
+        self.assertNotIn(b"secret-upstream-error", response.body)
+
+    @staticmethod
+    def auth_for(app):
+        bootstrap = app.issue_bootstrap_token()
+        response = app.handle(
+            "POST", "/api/session", {}, json.dumps({"bootstrap_token": bootstrap}).encode(),
+        )
+        return {"Authorization": "Bearer " + json.loads(response.body)["token"]}
 
     def test_start_requires_bearer_and_builds_internal_media_url(self):
         denied = self.app.handle("POST", "/api/transcription/start", {}, self.body(self.defaults()))

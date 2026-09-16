@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+import requests
+
 from live_player.core.catalog import discover_live_courses, resolve_course_ids
 from live_player.core.sources import LiveSourceResolver, rewrite_hls_manifest
 from live_player.transcription.models import TranscriptionOptions
@@ -55,6 +57,22 @@ def _json(status, value):
 
 def _error(status, code, message):
     return _json(status, {"error": {"code": code, "message": message}})
+
+
+def _is_auth_http_error(error):
+    """Return whether an upstream requests HTTPError proves session expiry."""
+    current = error
+    seen = set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, requests.exceptions.HTTPError):
+            response = getattr(current, "response", None)
+            if getattr(response, "status_code", None) in (401, 403):
+                return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return False
 
 
 @dataclass(frozen=True)
@@ -361,12 +379,28 @@ class LiveApplication:
         try:
             resolver.resolve(options.course_id, options.sub_id, "teacher_audio")
             view = "teacher_audio"
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError) as error:
+            if _is_auth_http_error(error):
+                self.session_manager.invalidate()
+                return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
             try:
                 resolver.resolve(options.course_id, options.sub_id, "teacher")
                 view = "teacher"
-            except (RuntimeError, ValueError):
+            except (RuntimeError, ValueError) as error:
+                if _is_auth_http_error(error):
+                    self.session_manager.invalidate()
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
                 return _error(422, "AUDIO_UNAVAILABLE", "Live audio is unavailable")
+            except Exception as error:
+                if _is_auth_http_error(error):
+                    self.session_manager.invalidate()
+                    return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+                raise
+        except Exception as error:
+            if _is_auth_http_error(error):
+                self.session_manager.invalidate()
+                return _error(401, "LOGIN_REQUIRED", "Platform sign-in required")
+            raise
 
         if self._loopback_authority is None:
             return _error(422, "AUDIO_UNAVAILABLE", "Live audio is unavailable")
