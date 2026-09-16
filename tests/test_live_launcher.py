@@ -6,6 +6,20 @@ from live_player import cli
 
 
 class InteractiveLauncherTest(unittest.TestCase):
+    def test_help_is_portable_to_legacy_windows_console_encodings(self):
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        try:
+            with patch("live_player.cli.sys.stdout", stream), self.assertRaises(SystemExit) as raised:
+                cli.main(["--help"], env={})
+            stream.flush()
+            output = stream.buffer.getvalue().decode("cp1252")
+        finally:
+            stream.close()
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("prompt for student ID, password, and courses", output)
+        self.assertIn("search by course name or teacher", output)
+        self.assertIn("course selection", output)
+
     def test_main_uses_ascii_fallback_when_stdout_cannot_encode_status(self):
         env = {"StuId": "student", "UISPsw": "secret", "COURSE_IDS": "1"}
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")

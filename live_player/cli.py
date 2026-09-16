@@ -268,8 +268,16 @@ def main(argv=None, env=None) -> int:
         ),
     )
     parser.add_argument("--pages", action="store_true", help="open the GitHub Pages live shell with a fragment pairing")
-    parser.add_argument("--interactive", action="store_true", help="按提示输入学号、密码和课程，无需配置环境变量")
-    parser.add_argument("--select-courses", action="store_true", help="重新按课程名或教师搜索，替换已保存的课程选择")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="prompt for student ID, password, and courses without environment variables",
+    )
+    parser.add_argument(
+        "--select-courses",
+        action="store_true",
+        help="search by course name or teacher and replace the saved course selection",
+    )
     parser.add_argument("--port", type=int, default=0, help="advanced: loopback port (0 selects one automatically)")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
