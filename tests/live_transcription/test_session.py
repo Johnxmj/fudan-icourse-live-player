@@ -70,10 +70,11 @@ class ManualTimer:
     def __init__(self, interval, function):
         self.interval, self.function = interval, function
         self.cancelled = False
+        self.started = False
         self.__class__.instances.append(self)
 
     def start(self):
-        pass
+        self.started = True
 
     def cancel(self):
         self.cancelled = True
@@ -81,6 +82,38 @@ class ManualTimer:
     def fire(self):
         # A callback may already be running when cancel() is called.
         self.function()
+
+
+class CleanupSensitiveTimer(ManualTimer):
+    """Record whether cleanup occurred before the deferred start call."""
+
+    def start(self):
+        self.started_after_cancel = self.cancelled
+        super().start()
+
+
+class ImmediateThread:
+    """Run the target synchronously to expose startup cleanup ordering."""
+
+    def __init__(self, target=None, args=(), daemon=None):
+        self.target, self.args, self.daemon = target, args, daemon
+        self.started = False
+        self.alive = False
+
+    def start(self):
+        self.started = True
+        self.alive = True
+        try:
+            if self.target is not None:
+                self.target(*self.args)
+        finally:
+            self.alive = False
+
+    def is_alive(self):
+        return self.alive
+
+    def join(self, timeout=None):
+        del timeout
 
 
 class BlockingPrepareEngine(Engine):
@@ -232,6 +265,23 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(manager._session.audio_stop.is_set())
         self.assertEqual(self.records(manager, session_id)[-1], {"type": "ended", "state": "stopped"})
 
+    def test_initial_deadline_survives_immediate_worker_cleanup_before_timer_start(self):
+        manager = self.manager(reader=Reader(), timer_factory=CleanupSensitiveTimer)
+
+        with patch("live_player.transcription.session.threading.Thread", ImmediateThread):
+            session_id = manager.start(OPTIONS, lambda: SECRET_URL)
+
+        session = manager._session
+        deadline = ManualTimer.instances[-1]
+        self.assertRegex(session_id, r"^[A-Za-z0-9_-]{32}$")
+        self.assertTrue(deadline.started)
+        self.assertTrue(deadline.cancelled)
+        self.assertTrue(deadline.started_after_cancel)
+        self.assertTrue(session.done.is_set())
+        deadline.fire()
+        self.assertFalse(session.stop_event.is_set())
+        self.assertEqual(self.records(manager, session_id)[-1]["state"], "live-ended")
+
     def test_initial_attachment_cancels_deadline_before_stale_callback_runs(self):
         manager = self.manager(reader=Reader(block=True), timer_factory=ManualTimer)
         session_id = manager.start(OPTIONS, lambda: SECRET_URL)
@@ -370,6 +420,112 @@ class SessionTests(unittest.TestCase):
         session.progress(140)
 
         self.assertEqual(list(session.queue), [{"type": "state", "state": "downloading-model", "progress": 100}])
+
+    def test_state_callback_cannot_enqueue_after_stop_and_terminal_commit(self):
+        session = _Session(OPTIONS, lambda: SECRET_URL)
+        state_thread = None
+        stop_thread = None
+        entered, release = threading.Event(), threading.Event()
+        stop_attempted, stop_committed = threading.Event(), threading.Event()
+        original_condition = session.condition
+        original_emit = session.emit
+
+        class TrackingCondition:
+            def __init__(self):
+                self.owner = None
+
+            def __enter__(self):
+                result = original_condition.__enter__()
+                self.owner = threading.current_thread()
+                return result
+
+            def __exit__(self, *args):
+                try:
+                    return original_condition.__exit__(*args)
+                finally:
+                    self.owner = None
+
+            def __getattr__(self, name):
+                return getattr(original_condition, name)
+
+        condition = TrackingCondition()
+        session.condition = condition
+
+        def gated_emit(record):
+            if threading.current_thread() is state_thread and record["type"] == "state":
+                entered.set()
+                release.wait()
+            return original_emit(record)
+
+        session.emit = gated_emit
+        state_thread = threading.Thread(target=session.state, args=("listening",), daemon=True)
+        state_thread.start()
+        self.assertTrue(entered.wait(1))
+
+        def stop_and_commit():
+            stop_attempted.set()
+            with session.condition:
+                TranscriptionManager._request_stop_locked(session)
+                session.emit({"type": "ended", "state": "stopped"})
+                session.done.set()
+                session.condition.notify_all()
+            stop_committed.set()
+
+        stop_thread = threading.Thread(target=stop_and_commit, daemon=True)
+        stop_thread.start()
+        self.assertTrue(stop_attempted.wait(1))
+        if condition.owner is state_thread:
+            self.assertFalse(stop_committed.wait(0.1))
+        else:
+            self.assertTrue(stop_committed.wait(1))
+        release.set()
+        state_thread.join(1)
+        stop_thread.join(1)
+
+        self.assertFalse(state_thread.is_alive())
+        self.assertFalse(stop_thread.is_alive())
+        self.assertEqual(list(session.queue), [
+            {"type": "state", "state": "listening"},
+            {"type": "ended", "state": "stopped"},
+        ])
+        self.assertEqual(list(session.history), [])
+
+    def test_progress_callback_cannot_mutate_queue_after_terminal_commit(self):
+        session = _Session(OPTIONS, lambda: SECRET_URL)
+        session.state("downloading-model")
+        progress_thread = None
+        entered, release = threading.Event(), threading.Event()
+        original_condition = session.condition
+
+        class ProgressGate:
+            def __enter__(self):
+                if threading.current_thread() is progress_thread:
+                    entered.set()
+                    release.wait()
+                return original_condition.__enter__()
+
+            def __exit__(self, *args):
+                return original_condition.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(original_condition, name)
+
+        session.condition = ProgressGate()
+        progress_thread = threading.Thread(target=session.progress, args=(75,), daemon=True)
+        progress_thread.start()
+        self.assertTrue(entered.wait(1))
+        with session.condition:
+            session.emit({"type": "ended", "state": "live-ended"})
+            session.done.set()
+            session.condition.notify_all()
+        release.set()
+        progress_thread.join(1)
+
+        self.assertFalse(progress_thread.is_alive())
+        self.assertEqual(list(session.queue), [
+            {"type": "state", "state": "downloading-model"},
+            {"type": "ended", "state": "live-ended"},
+        ])
 
     def test_sse_exposes_only_the_sanitized_latest_model_download_progress(self):
         engine = Engine()

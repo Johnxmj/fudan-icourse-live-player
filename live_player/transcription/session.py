@@ -97,7 +97,15 @@ class _Session:
             return True
 
     def state(self, state):
-        if state in SESSION_STATES and not self.stop_event.is_set():
+        if state not in SESSION_STATES:
+            return
+
+        # State publication and terminal-state transitions share this condition.
+        # Holding it across both the stop/done check and emit prevents a callback
+        # that began before stop from appending a state after the terminal record.
+        with self.condition:
+            if self.stop_event.is_set() or self.done.is_set():
+                return
             self.emit({"type": "state", "state": state})
 
     def progress(self, value):
@@ -105,7 +113,8 @@ class _Session:
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             return
         with self.condition:
-            if self.stop_event.is_set() or self.last_state != "downloading-model":
+            if (self.stop_event.is_set() or self.done.is_set()
+                    or self.last_state != "downloading-model"):
                 return
             progress = min(100, max(0, value))
             if self.download_progress is not None:
@@ -265,11 +274,15 @@ class TranscriptionManager:
             session = _Session(options, manifest_url_factory)
             session.worker = threading.Thread(target=self._run, args=(session,), daemon=True)
             self._session = session
-            session.attach_deadline_timer = self._new_timer(
+            attach_deadline_timer = self._new_timer(
                 _GRACE_SECONDS, self._expire_initial_attachment, session,
             )
+            session.attach_deadline_timer = attach_deadline_timer
+            # The deadline is established before the worker. A fast worker may
+            # finalize and clear the session field before this start call, so use
+            # the local reference rather than dereferencing mutable session state.
             session.worker.start()
-            session.attach_deadline_timer.start()
+            attach_deadline_timer.start()
             return session.id
 
     def events(self, session_id):
